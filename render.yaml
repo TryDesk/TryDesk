@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: trydesk
+    runtime: node
+    plan: free
+    rootDir: server
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /

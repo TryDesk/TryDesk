@@ -1,0 +1,50 @@
+services:
+  signaling:
+    build: ../server
+    restart: always
+    environment:
+      PORT: "9100"
+      TURN_SECRET: ${TURN_SECRET}
+      TURN_HOST: ${TURN_DOMAIN}
+      TURN_PORT: ${TURN_PORT}
+      OWNERS_FILE: /data/owners.json
+    volumes:
+      - signaling_data:/data
+    expose:
+      - "9100"
+    # Hardening: the node service needs no Linux capabilities, can't gain privileges, and is
+    # memory-capped so a signaling flood can't OOM the host.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+
+  caddy:
+    image: caddy:2
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DESK_DOMAIN: ${DESK_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - signaling
+
+  coturn:
+    image: coturn/coturn:4.6
+    restart: always
+    # TURN needs the real public IP and a wide UDP range; host networking avoids Docker NAT entirely
+    network_mode: host
+    command: ["-c", "/etc/coturn/turnserver.conf", "--log-file=stdout"]
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+
+volumes:
+  signaling_data:
+  caddy_data:
+  caddy_config:

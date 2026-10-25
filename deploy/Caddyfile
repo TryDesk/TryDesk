@@ -1,0 +1,3 @@
+{$DESK_DOMAIN} {
+	reverse_proxy signaling:9100
+}

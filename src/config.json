@@ -1,0 +1,7 @@
+{
+  "signalingServer": "wss://desk.trydesk.ai.id",
+  "iceServers": [
+    { "urls": "stun:stun.l.google.com:19302" },
+    { "urls": "stun:stun.cloudflare.com:3478" }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "name": "trydesk",
+  "version": "1.0.0",
+  "description": "TryDesk - Remote Desktop Software",
+  "author": "TryDesk",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "server": "node server/signaling-server.js",
+    "dev": "concurrently \"npm run server\" \"electron .\"",
+    "build": "electron-builder --win --x64",
+    "build:portable": "electron-builder --win portable --x64",
+    "build:installer": "electron-builder --win nsis --x64"
+  },
+  "dependencies": {
+    "discord-rpc": "^4.0.1",
+    "electron-store": "^8.1.0",
+    "koffi": "^2.9.0",
+    "uuid": "^9.0.0",
+    "ws": "^8.16.0"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1"
+  },
+  "build": {
+    "appId": "com.trydesk.app",
+    "productName": "TryDesk",
+    "copyright": "Copyright © 2026 TryDesk",
+    "files": [
+      "src/**/*",
+      "server/**/*",
+      "assets/**/*",
+      "node_modules/**/*"
+    ],
+    "win": {
+      "icon": "assets/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    },
+    "portable": {
+      "artifactName": "TryDesk-Portable.exe"
+    },
+    "nsis": {
+      "artifactName": "TryDesk-Setup-${version}.exe",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "TryDesk",
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico",
+      "installerHeaderIcon": "assets/icon.ico",
+      "deleteAppDataOnUninstall": false
+    },
+    "asar": true,
+    "asarUnpack": [
+      "node_modules/koffi/**"
+    ]
+  }
+}

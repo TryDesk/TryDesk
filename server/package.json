@@ -1,0 +1,15 @@
+{
+  "name": "trydesk-server",
+  "version": "1.0.0",
+  "private": true,
+  "main": "signaling-server.js",
+  "scripts": {
+    "start": "node signaling-server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.16.0"
+  }
+}
