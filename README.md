@@ -108,7 +108,7 @@ assets/                    App icon, logo & UI fonts
 **2. Get the code and its dependencies:**
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/trydesk.git
+git clone https://github.com/TryDesk/trydesk.git
 cd trydesk
 npm install          # downloads the libraries listed in package.json
 ```
