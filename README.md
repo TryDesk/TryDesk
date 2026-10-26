@@ -154,6 +154,10 @@ setup on a fresh Ubuntu server.
 - **App won't start / blank window** — some GPUs need software rendering; launch
   with `--no-gpu`. Startup problems are logged to
   `%APPDATA%\TryDesk\trydesk-crash.log` (see `diagnose.ps1`).
+- **Windows Sandbox / Hyper-V VM shuts down when a session starts** — GPU-accelerated
+  screen capture through a virtual GPU (GPU-PV) can terminate the whole VM. TryDesk
+  detects Windows Sandbox and Hyper-V guests and runs in software mode there
+  (`--force-gpu` overrides).
 - **A monitor can't be selected / shows another screen** — on some PCs (HDR on,
   or a monitor on a second GPU) Windows' default capturer can't see that monitor.
   TryDesk detects this at launch and restarts once with Windows Graphics Capture.

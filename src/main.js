@@ -27,7 +27,21 @@ try {
 let _noGpuFlag = null;
 try { _noGpuFlag = path.join(app.getPath("userData"), "disable-gpu.flag"); } catch {}
 const _flagExists = () => { try { return !!_noGpuFlag && fs.existsSync(_noGpuFlag); } catch { return false; } };
-const _forceNoGpu = process.argv.includes("--no-gpu") || !!process.env.TRYDESK_NO_GPU || _flagExists();
+// Hyper-V guests (Windows Sandbox, Hyper-V VMs) can expose the host's GPU through GPU-PV. There, GPU-accelerated
+// screen capture (DXGI / WGC frames shared with Chromium's GPU process) terminates the WHOLE VM the moment a
+// session starts (Sandbox: "virtual machine exited unexpectedly 0x80370106") — measured; GDI and software
+// rendering are fine. Such guests run in software mode. --force-gpu overrides.
+function _hyperVGuest() {
+  if (process.platform !== "win32") return null;
+  if ((process.env.USERNAME || "").toUpperCase() === "WDAGUTILITYACCOUNT") return "windows-sandbox";
+  try {
+    const out = require("child_process").execFileSync("reg", ["query", "HKLM\\HARDWARE\\DESCRIPTION\\System\\BIOS", "/v", "SystemProductName"], { encoding: "utf8", timeout: 1500, windowsHide: true });
+    if (/Virtual Machine/i.test(out)) return "hyper-v";
+  } catch {}
+  return null;
+}
+const _vmGuest = process.argv.includes("--force-gpu") ? null : _hyperVGuest();
+const _forceNoGpu = process.argv.includes("--no-gpu") || !!process.env.TRYDESK_NO_GPU || _flagExists() || !!_vmGuest;
 if (_forceNoGpu) { try { app.disableHardwareAcceleration(); } catch {} }
 
 // Screen-capture coverage: on some PCs the default DXGI capturer can't see a monitor (HDR on, or the monitor
@@ -54,7 +68,7 @@ function logCrash(tag, err) {
 function logInfo(msg) { try { fs.appendFileSync(_logFile, `[${new Date().toISOString()}] boot: ${msg}\n`); } catch {} }
 // Build stamp (packaged app.asar mtime) so a log shows WHICH build a client PC is really running.
 const _buildStamp = (() => { try { return require("original-fs").statSync(path.join(process.resourcesPath, "app.asar")).mtime.toISOString(); } catch { return "dev"; } })();
-logInfo(`module loaded — electron ${process.versions.electron}, ${process.platform} ${process.arch}, build ${_buildStamp}, no-gpu=${_forceNoGpu}, wgc=${_wgcOn}`);
+logInfo(`module loaded — electron ${process.versions.electron}, ${process.platform} ${process.arch}, build ${_buildStamp}, no-gpu=${_forceNoGpu}${_vmGuest ? ` (vm: ${_vmGuest})` : ""}, wgc=${_wgcOn}`);
 let _windowReady = false;   // true once the renderer has loaded
 // A crash BEFORE the window loads is startup-fatal: show it, then EXIT — so a half-dead process
 // doesn't linger holding the single-instance lock (which would make the next open "do nothing").

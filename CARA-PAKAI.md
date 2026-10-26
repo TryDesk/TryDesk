@@ -73,6 +73,8 @@ App client **tidak perlu di-build ulang**, karena tetap memakai `desk.trydesk.ai
 - Selama dikontrol, PC host menampilkan "Sesi remote aktif" + tombol **Putuskan**.
 - Alamat server sudah tetap (`wss://desk.trydesk.ai.id`) dan tidak bisa diubah dari UI, demi keamanan.
 
+Di Windows Sandbox dan VM Hyper-V, TryDesk otomatis berjalan tanpa akselerasi GPU: capture layar lewat GPU virtual (GPU-PV) bisa mematikan seluruh VM. Pada PC biasa GPU tetap dipakai. Paksa GPU dengan argumen `--force-gpu`.
+
 ## Fitur saat sesi berjalan (Control Center)
 
 - **Kualitas** (panel kanan):
