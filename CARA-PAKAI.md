@@ -83,7 +83,7 @@ App client **tidak perlu di-build ulang**, karena tetap memakai `desk.trydesk.ai
   - Overlay statistik: bitrate, FPS, latency, packet loss, resolusi, jalur (P2P/relay), codec
 - **File**: kirim file dua arah, streaming + progress, penerima klik Terima/Tolak dan pilih lokasi simpan.
 - **Clipboard**: teks tersinkron otomatis dua arah (bisa dimatikan di panel Kualitas).
-- **Monitor**: pemilih muncul bila remote punya >1 layar; ganti monitor tanpa putus.
+- **Monitor**: pemilih muncul bila remote punya >1 layar; ganti monitor tanpa putus. Bila sebuah monitor tak terbaca oleh capturer bawaan Windows (mis. HDR aktif / monitor di GPU lain), TryDesk otomatis restart sekali memakai Windows Graphics Capture.
 - **Audio**: dengarkan suara sistem PC remote (jika tersedia).
 - **Chat**: obrolan teks dua arah dalam sesi (juga dari layar host).
 - **Tombol**: kirim kombinasi — Ctrl+Alt+Del*, Alt+Tab, Win, Win+D, Win+E, Ctrl+Esc, Alt+F4, PrintScreen.

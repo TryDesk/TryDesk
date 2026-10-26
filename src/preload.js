@@ -8,7 +8,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   getSources: () => ipcRenderer.invoke("get-sources"),
   getScreenSize: () => ipcRenderer.invoke("get-screen-size"),
   getMonitors: () => ipcRenderer.invoke("get-monitors"),
-  setDisplayMediaSource: (id) => ipcRenderer.invoke("set-dm-source", id),
+  setDisplayMediaSource: (id, displayId) => ipcRenderer.invoke("set-dm-source", id, displayId),
   setCaptureDisplay: (d) => ipcRenderer.send("set-capture-display", d),
   executeInput: (event) => ipcRenderer.send("execute-input", event),
   focusWindow: () => ipcRenderer.send("focus-window"),

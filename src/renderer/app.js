@@ -52,6 +52,7 @@ class Session {
     // display / quality
     this.monitors = [];
     this.currentMonitor = 0;
+    this.capChain = Promise.resolve();   // host only: serializes capture swaps (see replaceCaptureTrack)
     this.audioAvailable = false;
     this.audioOn = false;
     this.quality = { ...defaultQuality };
@@ -863,7 +864,7 @@ let allowInput = true, allowFileTransfer = true, allowClipboardPref = true, forc
 function onCtrlMessage(sess, ev) {
   if (!ev || typeof ev !== "object") return;   // reject null / non-object payloads
   if (ev.__ctrl === "quality") { if (sess.role === "host") applyQualityToSender(sess, ev); }
-  else if (ev.__ctrl === "net-mode") { if (sess.role === "host" && !!ev.degraded !== !!sess._netDegraded) { sess._netDegraded = !!ev.degraded; applyQualityToSender(sess, hostQuality); } }
+  else if (ev.__ctrl === "net-mode") { if (sess.role === "host" && !!ev.degraded !== !!sess._netDegraded) { sess._netDegraded = !!ev.degraded; capLog(`net-mode degraded=${sess._netDegraded}`); applyQualityToSender(sess, hostQuality); } }
   else if (ev.__ctrl === "clipboard") { applyRemoteClipboard(sess, ev.text); }
   else if (ev.__ctrl === "monitors") { if (sess.role === "viewer") showMonitors(sess, ev); }
   else if (ev.__ctrl === "select-monitor") { if (sess.role === "host") switchMonitor(sess, ev.index); }
@@ -915,6 +916,22 @@ function handleFsResponse(sess, ev) {
 }
 
 // ─── Host: multi-monitor capture ──────────────────────────
+// Capture breadcrumbs in the app log (%APPDATA%\TryDesk\trydesk-crash.log): which monitor/source/path was
+// grabbed and why each re-capture happened — how a client PC's monitor-switch or flicker report is diagnosed.
+function capLog(msg) { try { window.electronAPI.logInfo("capture " + msg); } catch {} }
+
+// getDisplayMedia with a deadline: capture swaps run one at a time, so a request main never answers must
+// not stall every later swap. A stream that shows up after the deadline is stopped, not leaked.
+function displayMediaWithTimeout(constraints, ms = 8000) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const timer = setTimeout(() => { done = true; reject(new Error("getDisplayMedia timeout")); }, ms);
+    navigator.mediaDevices.getDisplayMedia(constraints).then(
+      (s) => { if (done) { s.getTracks().forEach((t) => t.stop()); return; } done = true; clearTimeout(timer); resolve(s); },
+      (e) => { if (done) return; done = true; clearTimeout(timer); reject(e); });
+  });
+}
+
 async function hostCapture(sess, index, withAudio) {
   const m = sess.monitors[index] || sess.monitors[0];
   // Capture at the frame rate the CHOSEN PRESET needs (not always max), so GPU/encode load tracks the
@@ -925,20 +942,21 @@ async function hostCapture(sess, index, withAudio) {
   const IDLE_MIN_FPS = 12;   // keep a static screen fresh (cheap repeat frames) → no stale frame / resume stutter
   const wantFps = Math.max(30, Math.min(CAPTURE_FPS_MAX, Math.round(hostQuality.fps || 60)));
   const W = Math.round(m.width * m.scaleFactor), H = Math.round(m.height * m.scaleFactor);
-  let stream;
+  let stream, via = "gdm";
   try {
     // Tell main which screen to hand getDisplayMedia (awaited, so it's set before the request), then grab it.
     // getDisplayMedia honors frameRate up to the display refresh — this is what unlocks >120 fps.
-    await window.electronAPI.setDisplayMediaSource(m.sourceId);
+    if (!(await window.electronAPI.setDisplayMediaSource(m.sourceId, m.displayId))) throw new Error("monitor not exposed as a capture source");
     // NOTE: getDisplayMedia does NOT support frameRate.min ("min constraints are not supported") — only
     // ideal/max. (The idle-freshness min stays on the legacy fallback below, which does support it.)
     const videoC = { width: { ideal: W }, height: { ideal: H }, frameRate: { ideal: wantFps, max: wantFps } };
     // Audio is best-effort: if loopback audio capture is unsupported, keep the HIGH-FPS video instead of
     // falling all the way back to the ≤120fps legacy path.
-    try { stream = await navigator.mediaDevices.getDisplayMedia({ video: videoC, audio: !!withAudio }); }
-    catch (eA) { if (withAudio) { stream = await navigator.mediaDevices.getDisplayMedia({ video: videoC, audio: false }); } else { throw eA; } }
+    try { stream = await displayMediaWithTimeout({ video: videoC, audio: !!withAudio }); }
+    catch (eA) { if (withAudio) { stream = await displayMediaWithTimeout({ video: videoC, audio: false }); } else { throw eA; } }
   } catch (e) {
     console.warn("getDisplayMedia failed, falling back to legacy desktopCapturer (<=120fps):", e.message);
+    via = "legacy"; capLog(`gdm failed (${e.message}) -> legacy`);
     const legacyFps = Math.min(120, wantFps);   // legacy ceiling
     const base = { chromeMediaSource: "desktop", chromeMediaSourceId: m.sourceId, maxWidth: W, maxHeight: H, maxFrameRate: legacyFps };
     const mkVideo = (withMin) => ({ mandatory: withMin ? { ...base, minFrameRate: IDLE_MIN_FPS } : { ...base } });
@@ -956,7 +974,12 @@ async function hostCapture(sess, index, withAudio) {
   // essential for responsive control, video and gaming (default treats desktop as "detail").
   const vt = stream.getVideoTracks()[0];
   if (vt) vt.contentHint = "motion";
-  hostCaptureFps = (vt && vt.getSettings().frameRate) || wantFps;   // actual negotiated rate (drives the re-capture decision)
+  // The ceiling we ASKED for drives the re-capture decision. Not the negotiated rate: that stays below the
+  // preset whenever the display refreshes slower (240 on a 165Hz screen), which made every quality/net-mode
+  // message trigger yet another re-capture.
+  hostCaptureFps = wantFps;
+  const got = (vt && vt.getSettings()) || {};
+  capLog(`mon=${index} ${m.label || ""} src=${m.sourceId} via=${via} want=${W}x${H}@${wantFps} got=${got.width}x${got.height}@${Math.round(got.frameRate || 0)}`);
   return { stream, m };
 }
 
@@ -971,11 +994,29 @@ function sendMonitors(sess) {
 }
 
 // Re-grab the host screen (new monitor or higher capture fps) and swap the video sender track.
-async function replaceCaptureTrack(sess, index) {
+// Swaps are SERIALIZED per session: overlapping re-captures (a monitor switch while a quality message
+// re-captures for fps) raced on main's single getDisplayMedia source, and the older one could finish last
+// and swap the PREVIOUS monitor back in. index null = whatever monitor is current when the swap runs;
+// onlyIfChanged skips a swap to the monitor already streaming (checked in order, after earlier swaps land).
+// reason is logged: repeated swaps are a stream reset each, so the log shows what caused a flicker.
+function replaceCaptureTrack(sess, index, onlyIfChanged = false, reason = "") {
+  const run = sess.capChain.then(() => {
+    const i = index == null ? Math.min(sess.currentMonitor, Math.max(0, sess.monitors.length - 1)) : index;
+    if (onlyIfChanged && i === sess.currentMonitor) return;
+    capLog(`swap (${reason}) mon ${sess.currentMonitor} -> ${i}`);
+    return swapCaptureTrack(sess, i);
+  });
+  sess.capChain = run.catch(() => {});
+  return run;
+}
+
+async function swapCaptureTrack(sess, index) {
   const sender = sess.pc && sess.pc.getSenders().find((s) => s.track && s.track.kind === "video");
   if (!sender) return;
   const { stream, m } = await hostCapture(sess, index, false);
   const newVideo = stream.getVideoTracks()[0];
+  // The session may have closed while this swap waited its turn — release the screen instead of leaking it.
+  if (!sess.pc || sess.pc.connectionState === "closed") { stream.getTracks().forEach((t) => t.stop()); return; }
   await sender.replaceTrack(newVideo);
   if (sess.videoTrack) sess.videoTrack.stop();
   sess.videoTrack = newVideo;
@@ -995,9 +1036,11 @@ async function replaceCaptureTrack(sess, index) {
 }
 
 async function switchMonitor(sess, index) {
-  if (!sess.monitors[index] || index === sess.currentMonitor || !sess.pc) return;
-  try { await replaceCaptureTrack(sess, index); applyQualityToSender(sess, hostQuality); }
+  if (!sess.monitors[index] || !sess.pc) return;
+  try { await replaceCaptureTrack(sess, index, true, "switch"); applyQualityToSender(sess, hostQuality); }
   catch (e) { console.error("switchMonitor gagal", e); }
+  // Report the monitor actually being streamed, so the viewer's picker never claims a switch that failed.
+  sendMonitors(sess);
 }
 
 async function applyQualityToSender(sess, q) {
@@ -1007,7 +1050,7 @@ async function applyQualityToSender(sess, q) {
   // If a higher frame rate than the current capture cap is requested, re-capture — the
   // mandatory maxFrameRate set at getUserMedia time is a hard ceiling that applyConstraints can't raise.
   if (q.fps != null && q.fps > hostCaptureFps) {
-    try { await replaceCaptureTrack(sess, sess.currentMonitor); } catch (e) { console.warn("recapture for fps failed", e); }
+    try { await replaceCaptureTrack(sess, null, false, `fps ${q.fps}`); } catch (e) { console.warn("recapture for fps failed", e); }
   }
   const params = sender.getParameters();
   if (!params.encodings || !params.encodings.length) params.encodings = [{}];
@@ -1049,7 +1092,7 @@ if (window.electronAPI && window.electronAPI.onDisplayChanged) {
       if (mon && sess._capW === mon.width && sess._capH === mon.height && sess._capSF === mon.scaleFactor) {
         sendMonitors(sess);   // keep the list fresh, but don't reset the stream
       } else {
-        await replaceCaptureTrack(sess, idx);
+        await replaceCaptureTrack(sess, null, false, "display changed");
         applyQualityToSender(sess, hostQuality);
         sendMonitors(sess);
       }

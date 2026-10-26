@@ -30,6 +30,16 @@ const _flagExists = () => { try { return !!_noGpuFlag && fs.existsSync(_noGpuFla
 const _forceNoGpu = process.argv.includes("--no-gpu") || !!process.env.TRYDESK_NO_GPU || _flagExists();
 if (_forceNoGpu) { try { app.disableHardwareAcceleration(); } catch {} }
 
+// Screen-capture coverage: on some PCs the default DXGI capturer can't see a monitor (HDR on, or the monitor
+// hangs off a different GPU), so getSources lists fewer screens than Windows has and that monitor can't be
+// streamed — picking it shows another screen. Windows Graphics Capture (WGC) sees every monitor. It is
+// switched on only where that gap was detected (flag written by the startup check / get-monitors), so every
+// other PC keeps the default capturer. --wgc forces it for testing.
+let _wgcFlag = null;
+try { _wgcFlag = path.join(app.getPath("userData"), "wgc-capture.flag"); } catch {}
+const _wgcOn = process.argv.includes("--wgc") || (() => { try { return !!_wgcFlag && fs.existsSync(_wgcFlag); } catch { return false; } })();
+if (_wgcOn) { try { app.commandLine.appendSwitch("enable-features", "AllowWgcScreenCapturer"); } catch {} }
+
 // Make any startup failure VISIBLE (and logged) instead of a silent no-window exit — so a client PC
 // that "shows nothing" gives a real error + a log we can read, rather than just vanishing.
 let _logFile;
@@ -42,7 +52,9 @@ function logCrash(tag, err) {
 // Quiet breadcrumbs (no dialog) so the log traces how far startup got on a PC where "nothing appears":
 // if the file has "boot: module loaded" but not "boot: app ready", Electron never reached our JS.
 function logInfo(msg) { try { fs.appendFileSync(_logFile, `[${new Date().toISOString()}] boot: ${msg}\n`); } catch {} }
-logInfo(`module loaded — electron ${process.versions.electron}, ${process.platform} ${process.arch}, no-gpu=${_forceNoGpu}`);
+// Build stamp (packaged app.asar mtime) so a log shows WHICH build a client PC is really running.
+const _buildStamp = (() => { try { return require("original-fs").statSync(path.join(process.resourcesPath, "app.asar")).mtime.toISOString(); } catch { return "dev"; } })();
+logInfo(`module loaded — electron ${process.versions.electron}, ${process.platform} ${process.arch}, build ${_buildStamp}, no-gpu=${_forceNoGpu}, wgc=${_wgcOn}`);
 let _windowReady = false;   // true once the renderer has loaded
 // A crash BEFORE the window loads is startup-fatal: show it, then EXIT — so a half-dead process
 // doesn't linger holding the single-instance lock (which would make the next open "do nothing").
@@ -164,9 +176,27 @@ function createWindow() {
   mainWindow.webContents.on("will-attach-webview", (e) => e.preventDefault());
 }
 
-app.whenReady().then(() => {
+// The DXGI coverage gap described at _wgcFlag: Windows reports more displays than the capturer lists.
+async function captureCoverageGap() {
+  const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } });
+  return { gap: screen.getAllDisplays().length > sources.length, sources: sources.length };
+}
+
+app.whenReady().then(async () => {
   if (!_gotLock) { logInfo("second instance — quitting"); return; }   // a primary instance already owns the window
   logInfo("app ready");
+  // Relaunch ONCE into WGC before any window exists when a monitor is invisible to the default capturer,
+  // so the very first session can already stream it. Bounded wait: never delays startup by more than 2s.
+  if (!_wgcOn && _wgcFlag) {
+    try {
+      const r = await Promise.race([captureCoverageGap(), new Promise((res) => setTimeout(() => res(null), 2000))]);
+      if (r && r.gap) {
+        fs.writeFileSync(_wgcFlag, "1");
+        logInfo(`capture gap: ${screen.getAllDisplays().length} displays but ${r.sources} capture sources — relaunching with WGC`);
+        app.relaunch(); app.exit(0); return;
+      }
+    } catch (e) { logInfo("capture coverage check failed: " + e.message); }
+  }
   // Windows shows this as the notification's app name; without it toasts read "electron.app.TryDesk".
   try { app.setAppUserModelId("TryDesk"); } catch {}
   // Content-Security-Policy as a response header (defense-in-depth alongside the <meta> in index.html).
@@ -189,7 +219,10 @@ app.whenReady().then(() => {
     if (session.defaultSession.setDisplayMediaRequestHandler) {
       session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
         desktopCapturer.getSources({ types: ["screen"] }).then((sources) => {
-          const src = sources.find((s) => s.id === _dmSourceId) || sources[0];
+          // Never silently substitute the first screen for a REQUESTED one — that streamed the wrong monitor
+          // ("stuck on the previous monitor"). set-dm-source already verified the id; a miss here means the
+          // screen vanished in between → deny, and the renderer falls back to the legacy path.
+          const src = sources.find((s) => s.id === _dmSourceId) || (_dmSourceId ? null : sources[0]);
           // audio: "loopback" = capture the host's SYSTEM audio (Windows) so remote audio works. Only
           // materializes into a track when the renderer's getDisplayMedia asks for audio (host start does).
           callback(src ? { video: src, audio: "loopback" } : {});
@@ -333,6 +366,7 @@ ipcMain.handle("get-screen-size", () => {
   return { width: d.size.width, height: d.size.height, scaleFactor: d.scaleFactor };
 });
 
+let _lastMonitorMap = "";
 ipcMain.handle("get-monitors", async () => {
   // Enumerate by OS DISPLAY — screen.getAllDisplays() is the authoritative monitor count/geometry,
   // so every physical monitor is always listed even when desktopCapturer.getSources() under-reports
@@ -361,10 +395,16 @@ ipcMain.handle("get-monitors", async () => {
   for (const d of displays) {
     if (!srcForDisplay.has(d.id) && ri < remaining.length) { srcForDisplay.set(d.id, remaining[ri]); usedSrc.add(remaining[ri].id); ri++; }
   }
+  // A monitor plugged in mid-run can open the coverage gap too: remember it so the NEXT launch uses WGC.
+  if (!_wgcOn && _wgcFlag && sources.length < displays.length) { try { fs.writeFileSync(_wgcFlag, "1"); } catch {} }
+  // Log the display↔source mapping when it changes — the first thing to read when a monitor won't switch.
+  const _map = `wgc=${_wgcOn} displays=[${displays.map((d) => `${d.id}:${d.label || "?"} ${d.size.width}x${d.size.height}@${d.scaleFactor}`).join(", ")}] sources=[${sources.map((s) => `${s.id}/${s.display_id || "-"}`).join(", ")}]`;
+  if (_map !== _lastMonitorMap) { _lastMonitorMap = _map; logInfo("monitors " + _map); }
   return displays.map((d, i) => {
     const src = srcForDisplay.get(d.id) || null;
     return {
       sourceId: src ? src.id : `screen:${i}:0`,   // synthesized last-resort id keeps the monitor capturable
+      displayId: String(d.id),
       index: i,
       label: (src && src.name) || d.label || `Monitor ${i + 1}`,
       boundsX: d.bounds.x, boundsY: d.bounds.y,
@@ -378,7 +418,17 @@ let captureDisplay = null;
 ipcMain.on("set-capture-display", (_e, d) => { captureDisplay = d; });
 // Which screen getDisplayMedia should feed (monitor select). Awaitable so the renderer sets it BEFORE
 // calling getDisplayMedia — avoids a race where the handler picks the wrong/first screen.
-ipcMain.handle("set-dm-source", (_e, id) => { _dmSourceId = id || null; return true; });
+// Resolves the monitor to a LIVE source now (exact id, else its OS display id) and returns whether one exists;
+// false tells the renderer to use the legacy capture path instead of letting getDisplayMedia grab another screen.
+ipcMain.handle("set-dm-source", async (_e, id, displayId) => {
+  let src = null;
+  try {
+    const sources = await desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width: 1, height: 1 } });
+    src = sources.find((s) => s.id === id) || (displayId ? sources.find((s) => String(s.display_id) === String(displayId)) : null) || null;
+  } catch {}
+  _dmSourceId = src ? src.id : null;
+  return !!src;
+});
 
 ipcMain.on("focus-window", () => { if (mainWindow) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } });
 ipcMain.on("minimize-window", () => mainWindow?.minimize());

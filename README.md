@@ -108,7 +108,7 @@ assets/                    App icon, logo & UI fonts
 **2. Get the code and its dependencies:**
 
 ```bash
-git clone https://github.com/TryDesk/trydesk.git
+git clone https://github.com/YOUR-USERNAME/trydesk.git
 cd trydesk
 npm install          # downloads the libraries listed in package.json
 ```
@@ -154,6 +154,10 @@ setup on a fresh Ubuntu server.
 - **App won't start / blank window** — some GPUs need software rendering; launch
   with `--no-gpu`. Startup problems are logged to
   `%APPDATA%\TryDesk\trydesk-crash.log` (see `diagnose.ps1`).
+- **A monitor can't be selected / shows another screen** — on some PCs (HDR on,
+  or a monitor on a second GPU) Windows' default capturer can't see that monitor.
+  TryDesk detects this at launch and restarts once with Windows Graphics Capture.
+  Each capture and re-capture is logged to `%APPDATA%\TryDesk\trydesk-crash.log`.
 - **"Unknown publisher" warning on Windows** — the app isn't signed with a paid
   certificate yet. It's safe to run (open-source, you can read every line).
   Code signing is planned.
