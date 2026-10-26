@@ -135,7 +135,16 @@ function register(ws, msg) {
 
   const valid = id && /^\d{3} \d{3} \d{3}$/.test(id) && token;
   const ownedByOther = valid && owners.has(id) && owners.get(id) !== token;
-  if (!valid || ownedByOther || online.has(id)) id = newId();
+  if (!valid || ownedByOther) id = newId();
+  else if (online.has(id) && online.get(id) !== ws) {
+    // The SAME device re-registering (same ID + owner token) while its previous socket still looks online:
+    // after sleep / a Wi-Fi switch the old half-open socket lingers until the ping sweep notices (25-50s).
+    // Handing out a fresh ID here changed the user's ID for good — take the ID over instead. The old socket's
+    // close handler ignores it because `online` no longer points at it, so live pairings are kept.
+    const old = online.get(id);
+    if (owners.get(id) === token) { try { old.terminate(); } catch {} }
+    else id = newId();
+  }
 
   const finalToken = token || crypto.randomBytes(16).toString("hex");
   if (owners.get(id) !== finalToken) {
@@ -159,10 +168,11 @@ function handle(ws, msg) {
 
   switch (msg.type) {
     case "connect-request": {
-      if (!connReqOk(ws)) { send(ws, { type: "error", message: "Terlalu banyak permintaan, coba lagi sebentar" }); return; }
-      const target = msg.targetId;
+      // Errors name the request's target so a client with several tabs closes the right one.
+      const target = typeof msg.targetId === "string" ? msg.targetId.slice(0, 16) : "";
+      if (!connReqOk(ws)) { send(ws, { type: "error", targetId: target, message: "Terlalu banyak permintaan, coba lagi sebentar" }); return; }
       if (target === me || !online.has(target)) {
-        send(ws, { type: "error", message: "ID tidak ditemukan atau sedang offline" });
+        send(ws, { type: "error", targetId: target, message: "ID tidak ditemukan atau sedang offline" });
         return;
       }
       // Block controlling your own PC. A second TryDesk instance on the same device shares the
@@ -170,7 +180,7 @@ function handle(ws, msg) {
       // instances have different IDs. Remoting it would cause an infinite screen loop / input bounce.
       const myOwner = owners.get(me);
       if (myOwner && myOwner === owners.get(target)) {
-        send(ws, { type: "error", message: "Tidak bisa me-remote PC Anda sendiri" });
+        send(ws, { type: "error", targetId: target, message: "Tidak bisa me-remote PC Anda sendiri" });
         return;
       }
       // Clear stale state before the "busy" check so an abrupt drop never blocks a fresh request,
@@ -180,7 +190,7 @@ function handle(ws, msg) {
       for (const peer of peersOf(target)) { if (!online.has(peer)) removePair(target, peer); }
       // A host is single-session: if the target still has any online peer, it's busy.
       if (peersOf(target).some((p) => online.has(p))) {
-        send(ws, { type: "error", message: "Remote desktop sedang dalam sesi lain" });
+        send(ws, { type: "error", targetId: target, message: "Remote desktop sedang dalam sesi lain" });
         return;
       }
       addPending(me, target);
@@ -302,7 +312,7 @@ wss.on("connection", (ws, req) => {
     for (const [req, targets] of pending) {
       if (targets.has(id)) {
         removePending(req, id);
-        sendTo(req, { type: "error", message: "Remote desktop offline" });
+        sendTo(req, { type: "error", targetId: id, message: "Remote desktop offline" });
       }
     }
     online.delete(id);

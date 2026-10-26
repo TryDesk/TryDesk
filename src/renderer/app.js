@@ -15,6 +15,7 @@ let hostQuality = { bitrate: 80, fps: 60, resHeight: 0 };
 let acceptPending = false;        // an accept dialog is currently open for an incoming request
 let acceptTimerHandle = null;
 let acceptDlgCancel = null;       // cancels that dialog (resolves it false) if the session ends
+let acceptFromId = null;          // who that dialog is for (so their request-cancelled closes it)
 let hostingStartTime = null;
 let hostingTimerHandle = null;
 
@@ -562,6 +563,13 @@ async function onSignal(msg) {
       if (_regenPending) { _regenPending = false; showToast(t("id_regenerated") + ": " + fmtId(myId)); }
       break;
     case "incoming-connection": handleIncoming(msg); break;
+    case "request-cancelled": {
+      // The requester gave up (Cancel / went offline) while we were still asking. Close the accept dialog or
+      // drop the password challenge — accepting a dead request left the host capturing and "busy" for good.
+      if (acceptFromId === msg.fromId && acceptDlgCancel) acceptDlgCancel();
+      if (pendingChallenge && pendingChallenge.fromId === msg.fromId) { clearTimeout(pendingChallenge._t); pendingChallenge = null; }
+      break;
+    }
     case "connection-challenge": {
       // Host requires an access password. Prove we know it via HMAC over the host's nonce —
       // the password itself never travels. Garbage/empty response simply gets rejected by the host.
@@ -604,14 +612,25 @@ async function onSignal(msg) {
     }
     case "peer-disconnected": {
       const s = sessionFor(msg.fromId);
-      if (s) { closeSession(s, false); showToast("Remote desktop memutus koneksi"); }
+      if (!s) break;
+      // The server also reports this when only the SIGNALING link blipped (or the server restarted) while the
+      // P2P session is perfectly healthy. A real hang-up closes the data channel within moments, so with a live
+      // link wait briefly and only tear down if it really went away.
+      const linkUp = () => s.pc && s.pc.connectionState === "connected" && s.dataChannel && s.dataChannel.readyState === "open";
+      const stillOurs = () => (s.role === "host" ? host === s : sessions.get(s.peerId) === s);
+      const hangUp = () => { closeSession(s, false); showToast("Remote desktop memutus koneksi"); };
+      if (linkUp()) setTimeout(() => { if (stillOurs() && !linkUp()) hangUp(); }, 3000);
+      else hangUp();
       break;
     }
-    case "error":
-      // Error (target offline/busy) applies to the tab that is still connecting — the active one.
-      if (active && active.pc == null) closeSession(active, false);
+    case "error": {
+      // Errors (target offline/busy) belong to a tab that is still connecting. Newer servers name it in
+      // targetId; otherwise fall back to the active tab.
+      const s = msg.targetId ? sessions.get(msg.targetId) : active;
+      if (s && s.role === "viewer" && s.pc == null) closeSession(s, false);
       showToast(msg.message);
       break;
+    }
   }
 }
 
@@ -640,6 +659,11 @@ function initiateConnection() {
   $("#connecting-text").textContent = `Meminta akses ke ${targetId}...`;
   sendSignal({ type: "connect-request", targetId, fromName: store.get("deviceAlias") || "TryDesk User" });
   setTimeout(() => { if (sessions.get(targetId) === sess && !sess.pc && sess === active) setConnectStep(2); }, 500);
+  // Never leave a tab on "connecting" forever (no answer, or an error the server sent without naming the tab).
+  // The host's accept dialog / password challenge time out at 30s, so 45s means nobody is answering.
+  sess.requestTimer = setTimeout(() => {
+    if (sessions.get(targetId) === sess && !sess.pc) { closeSession(sess, true); showToast("Tidak ada respons dari remote desktop"); }
+  }, 45000);
 }
 
 async function startViewer(sess) {
@@ -752,7 +776,8 @@ async function handleIncoming(msg) {
   if (host) {
     // Only truly busy if the existing peer connection is still alive. Otherwise it's a stale
     // session left over from an abrupt drop — clear it and accept the new request (no restart needed).
-    const alive = host.pc && ["new", "connecting", "connected"].includes(host.pc.connectionState);
+    // No pc yet = the previous accept is still setting up capture: that is busy, not stale.
+    const alive = !host.pc || ["new", "connecting", "connected"].includes(host.pc.connectionState);
     if (alive) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: "Remote desktop sedang sibuk" }); return; }
     closeSession(host, false);
   }
@@ -805,6 +830,8 @@ async function finishAccept(fromId) {
     sess.monitors = await window.electronAPI.getMonitors();
     sess.currentMonitor = Math.max(0, sess.monitors.findIndex((m) => m.primary));
     const { stream, m } = await hostCapture(sess, sess.currentMonitor, true);
+    // Hosting was stopped while capture was starting — release the screen instead of streaming it to nobody.
+    if (host !== sess) { stream.getTracks().forEach((t) => t.stop()); return; }
     sess.localStream = stream;
     sess.videoTrack = stream.getVideoTracks()[0];
     sess.audioAvailable = stream.getAudioTracks().length > 0;
@@ -844,6 +871,9 @@ async function finishAccept(fromId) {
   showScreen("hosting");
   startHostingTimer();
   sendSignal({ type: "connection-accepted", targetId: sess.peerId });
+  // If the viewer never sets up the call (it vanished between asking and our accept), don't stay "being
+  // controlled" — capturing the screen and turning everyone else away as busy.
+  setTimeout(() => { if (host === sess && sess.pc && sess.pc.connectionState !== "connected") closeSession(sess, false); }, 30000);
 }
 
 async function onOffer(sess, offer) {
@@ -873,6 +903,7 @@ function onCtrlMessage(sess, ev) {
   else if (ev.__ctrl === "chat") { onChatReceived(sess, ev.text); }
   else if (ev.__ctrl === "black-screen") { if (sess.role === "host") handleBlackScreen(sess, ev.enabled); }
   else if (ev.__ctrl === "lock-input") { if (sess.role === "host") handleLockInput(sess, ev.enabled); }
+  else if (ev.__ctrl === "privacy-result") { if (sess.role === "viewer") onPrivacyResult(sess, ev); }
   else if (ev.__ctrl === "fs-req") { handleFsRequest(sess, ev); }
   else if (ev.__ctrl === "fs-res") { handleFsResponse(sess, ev); }
   // Anything else is a remote input event — only execute it when WE are the host AND control is
@@ -894,8 +925,24 @@ async function handleFsRequest(sess, ev) {
   } catch (e) {
     res = { ok: false, error: String(e && e.message || e), path: ev.path, display: ev.path || "" };
   }
-  try { sess.dataChannel.send(JSON.stringify({ __ctrl: "fs-res", reqId: ev.reqId, res })); } catch {}
+  // A data-channel message is capped at 256 KB, so a big folder (System32, a full Downloads) failed to send
+  // and the viewer just timed out. Send it in parts the viewer stitches back together.
+  const one = JSON.stringify({ __ctrl: "fs-res", reqId: ev.reqId, res });
+  if (new Blob([one]).size <= FS_PART_BYTES || !res.ok || !Array.isArray(res.entries)) { try { sess.dataChannel.send(one); } catch {} return; }
+  const parts = [];
+  let cur = [], curBytes = 0;
+  for (const e of res.entries) {
+    const b = new Blob([JSON.stringify(e)]).size + 1;
+    if (cur.length && curBytes + b > FS_PART_BYTES - 4096) { parts.push(cur); cur = []; curBytes = 0; }
+    cur.push(e); curBytes += b;
+  }
+  if (cur.length) parts.push(cur);
+  for (let i = 0; i < parts.length; i++) {
+    while (sess.dataChannel && sess.dataChannel.bufferedAmount > BUFFER_HIGH) await sleep(20);
+    try { sess.dataChannel.send(JSON.stringify({ __ctrl: "fs-res", reqId: ev.reqId, part: i, parts: parts.length, res: { ...res, entries: parts[i] } })); } catch { return; }
+  }
 }
+const FS_PART_BYTES = 200_000;
 
 function requestRemoteList(sess, { path = null, home = false } = {}) {
   return new Promise((resolve, reject) => {
@@ -908,11 +955,22 @@ function requestRemoteList(sess, { path = null, home = false } = {}) {
 }
 
 function handleFsResponse(sess, ev) {
-  const p = sess.fsPending.get(ev.reqId);
+  const reqId = ev.reqId;
+  const p = sess.fsPending.get(reqId);
   if (!p) return;
+  let res = ev.res;
+  // Multi-part listing (big folder): collect every part, then resolve with all entries in order.
+  const parts = Number(ev.parts);
+  if (Number.isInteger(parts) && parts > 1 && parts <= 1000 && Number.isInteger(ev.part) && ev.part >= 0 && ev.part < parts && res) {
+    p.got = p.got || new Array(parts);
+    p.got[ev.part] = Array.isArray(res.entries) ? res.entries : [];
+    p.head = p.head || res;
+    if (p.got.filter(Boolean).length < parts) return;
+    res = { ...p.head, entries: p.got.flat() };
+  }
   clearTimeout(p.timer);
-  sess.fsPending.delete(ev.reqId);
-  p.resolve(ev.res);
+  sess.fsPending.delete(reqId);
+  p.resolve(res);
 }
 
 // ─── Host: multi-monitor capture ──────────────────────────
@@ -1052,22 +1110,29 @@ async function applyQualityToSender(sess, q) {
   if (q.fps != null && q.fps > hostCaptureFps) {
     try { await replaceCaptureTrack(sess, null, false, `fps ${q.fps}`); } catch (e) { console.warn("recapture for fps failed", e); }
   }
-  const params = sender.getParameters();
-  if (!params.encodings || !params.encodings.length) params.encodings = [{}];
-  // Good network → keep the remote screen SHARP at native resolution (drop FPS, not resolution). Unstable
-  // network (high loss/RTT, the viewer signals it via the "net-mode" control) → switch to "balanced" so
-  // WebRTC can shed RESOLUTION and keep the picture MOVING instead of freezing at full res @ ~6fps — far
-  // friendlier on bad/relay links. (maintain-framerate downscaled to 640x360 on connect, so we avoid it.)
-  params.degradationPreference = sess._netDegraded ? "balanced" : "maintain-resolution";
-  const enc = params.encodings[0];
-  if (q.bitrate != null) enc.maxBitrate = Math.round(q.bitrate * 1_000_000);
-  if (q.fps != null) enc.maxFramerate = q.fps;
-  enc.networkPriority = "high";
-  if (q.resHeight != null) {
-    enc.scaleResolutionDownBy = (q.resHeight > 0 && hostCaptureHeight > q.resHeight)
-      ? +(hostCaptureHeight / q.resHeight).toFixed(3) : 1;
-  }
-  try { await sender.setParameters(params); } catch (e) { console.warn("setParameters failed", e); }
+  const setEncoder = () => {
+    const params = sender.getParameters();
+    if (!params.encodings || !params.encodings.length) params.encodings = [{}];
+    // Good network → keep the remote screen SHARP at native resolution (drop FPS, not resolution). Unstable
+    // network (high loss/RTT, the viewer signals it via the "net-mode" control) → switch to "balanced" so
+    // WebRTC can shed RESOLUTION and keep the picture MOVING instead of freezing at full res @ ~6fps — far
+    // friendlier on bad/relay links. (maintain-framerate downscaled to 640x360 on connect, so we avoid it.)
+    params.degradationPreference = sess._netDegraded ? "balanced" : "maintain-resolution";
+    const enc = params.encodings[0];
+    if (q.bitrate != null) enc.maxBitrate = Math.round(q.bitrate * 1_000_000);
+    if (q.fps != null) enc.maxFramerate = q.fps;
+    enc.networkPriority = "high";
+    if (q.resHeight != null) {
+      enc.scaleResolutionDownBy = (q.resHeight > 0 && hostCaptureHeight > q.resHeight)
+        ? +(hostCaptureHeight / q.resHeight).toFixed(3) : 1;
+    }
+    return sender.setParameters(params);
+  };
+  // Overlapping quality updates (connect + the viewer's first quality message, net-mode flips) can invalidate
+  // the parameters this call read ("getParameters() has never been called"), silently dropping the bitrate/fps/
+  // degradation settings. Re-read and apply once more so the encoder never keeps stale settings.
+  try { await setEncoder(); }
+  catch (e) { try { await setEncoder(); } catch (e2) { console.warn("setParameters failed", e2); capLog("setParameters failed: " + e2.message); } }
   if (q.fps != null) {
     const vt = sess.localStream && sess.localStream.getVideoTracks()[0];
     if (vt) vt.applyConstraints({ frameRate: { ideal: q.fps, max: q.fps } }).catch(() => {});
@@ -1120,7 +1185,7 @@ function createPeer(sess) {
   pc.onicecandidate = (e) => { if (e.candidate) sendSignal({ type: "ice-candidate", targetId: sess.peerId, candidate: e.candidate }); };
   pc.onconnectionstatechange = () => {
     if (sess.pc !== pc) return;   // a newer pc replaced this one — ignore stale events
-    if (pc.connectionState === "connected") { sess.reconnectAttempts = 0; updateDiscordPresence(); }
+    if (pc.connectionState === "connected") { sess.reconnectAttempts = 0; if (sess.role === "viewer") reconnectAttempts = 0; updateDiscordPresence(); }
     else if (pc.connectionState === "failed") {
       const target = sess.role === "viewer" ? sess.peerId : null;
       const wasActive = sess === active || sess.role === "host";
@@ -1128,6 +1193,9 @@ function createPeer(sess) {
       if (target && autoReconnect) tryReconnect(target);
       else if (wasActive) showToast(serverIceServers.length ? "Koneksi gagal — relay TURN tidak terjangkau" : "Koneksi P2P gagal — server belum menyediakan TURN relay");
     } else if (pc.connectionState === "disconnected") {
+      // Host: the viewer can't send key/button "up" events while the link is down — don't leave them held
+      // here for the 5s grace period (or forever, if it never comes back).
+      if (sess.role === "host") { try { window.electronAPI.releaseRemoteInput(); } catch {} }
       clearTimeout(sess.disconnectTimer);
       sess.disconnectTimer = setTimeout(() => {
         // Only act if this is still the same live connection (avoid tearing down a new session)
@@ -1160,12 +1228,13 @@ function closeSession(sess, notify = true) {
   if (!sess) return;
   const isViewer = sess.role === "viewer";
   const wasActive = sess === active;
-  if (isViewer && recordingActive) stopRecording();   // flush & save any in-progress recording
+  if (isViewer && recordingActive && recordingSess === sess) stopRecording();   // flush & save THIS tab's recording
   // Tell the server to drop THIS specific pairing (targetId scopes it to the right peer so other
   // tabs survive). On an old single-session server, targetId is simply ignored.
   if (sess.peerId) sendSignal({ type: (isViewer && !sess.pc) ? "cancel-request" : "disconnect", targetId: sess.peerId });
 
   clearTimeout(sess.disconnectTimer); sess.disconnectTimer = null;
+  clearTimeout(sess.requestTimer);
   stopStats(sess);
   stopClipboardSync(sess);
   cleanupTransfers(sess);
@@ -1181,14 +1250,18 @@ function closeSession(sess, notify = true) {
   updateDiscordPresence();   // session ended → refresh (likely back to "idle")
 
   if (sess.role === "host") {
+    // Only the CURRENT host session owns the shared host state (privacy overlays, held input, UI) — a late
+    // teardown of an older, already-replaced one must not undo the live session's.
+    if (host !== sess) return;
     // Host teardown — release privacy features defensively and reset host UI.
+    try { window.electronAPI.releaseRemoteInput(); } catch {}
     if (acceptDlgCancel) acceptDlgCancel();
     if (acceptTimerHandle) { clearInterval(acceptTimerHandle); acceptTimerHandle = null; }
     try { window.electronAPI.disableBlackScreen(); } catch {}
     try { window.electronAPI.disableInputLock(); } catch {}
     stopHostingTimer();
-    hostCaptureHeight = 0;
     $("#overlay-accept").classList.add("hidden");
+    hostCaptureHeight = 0;
     $("#blackscreen-notice")?.classList.add("hidden");
     host = null;
     showScreen(viewerSessions().length ? "remote" : "home");
@@ -1319,6 +1392,7 @@ function askAccept(fromId, fromName) {
     let remaining = ACCEPT_TIMEOUT;
     timerBar.style.width = "100%";
     acceptPending = true;
+    acceptFromId = fromId;
 
     if (acceptTimerHandle) clearInterval(acceptTimerHandle);
     acceptTimerHandle = setInterval(() => {
@@ -1333,6 +1407,7 @@ function askAccept(fromId, fromName) {
       if (settled) return;
       settled = true;
       acceptPending = false;
+      acceptFromId = null;
       acceptDlgCancel = null;
       if (acceptTimerHandle) { clearInterval(acceptTimerHandle); acceptTimerHandle = null; }
       ov.classList.add("hidden");
@@ -1443,7 +1518,10 @@ function toggleAudio() {
 }
 
 // ─── Chat (per session: the active viewer tab, or the host session) ───
-function curChatSess() { return active || host; }
+// The session the user is looking at: on the "being controlled" screen that is the host session, even when a
+// viewer tab is also open — otherwise chat replies / sent files went to the wrong person.
+function onHostingScreen() { return !!host && !$("#screen-hosting").classList.contains("hidden"); }
+function curChatSess() { return onHostingScreen() ? host : (active || host); }
 function chatOpen() { return !$("#chat-panel").classList.contains("hidden"); }
 function openChat() {
   const sess = curChatSess(); if (!sess) return;
@@ -1551,7 +1629,18 @@ function showChatNotification(sess, text) {
 
 // ─── Black screen (privacy mode) ──────────────────────────
 // handleBlackScreen runs on the HOST side (sess = host). toggleBlackScreen is the viewer control.
+// Black screen and input lock act on THIS machine, so they obey the same host-side permission as input: a
+// viewer the host limited to view-only (or with control switched off) may not darken or lock it. The host
+// reports the real outcome so the viewer's toggle never claims something that didn't happen.
+const hostControlAllowed = () => allowInput && !forceViewOnly;
+function sendPrivacyResult(sess, feature, enabled, ok, reason) {
+  if (sess.dataChannel && sess.dataChannel.readyState === "open") {
+    try { sess.dataChannel.send(JSON.stringify({ __ctrl: "privacy-result", feature, enabled, ok, reason })); } catch {}
+  }
+}
+
 async function handleBlackScreen(sess, enabled) {
+  if (enabled && !hostControlAllowed()) { sendPrivacyResult(sess, "black-screen", true, false, "denied"); return; }
   sess.blackScreenActive = !!enabled;
   if (enabled) await window.electronAPI.enableBlackScreen();
   else await window.electronAPI.disableBlackScreen();
@@ -1567,10 +1656,25 @@ function toggleBlackScreen() {
 }
 
 // ─── Lock host input ──────────────────────────────────────
-function handleLockInput(sess, enabled) {
-  sess.inputLocked = !!enabled;
-  if (enabled) window.electronAPI.enableInputLock();
-  else window.electronAPI.disableInputLock();
+async function handleLockInput(sess, enabled) {
+  if (!enabled) { sess.inputLocked = false; window.electronAPI.disableInputLock(); return; }
+  if (!hostControlAllowed()) { sendPrivacyResult(sess, "lock-input", true, false, "denied"); return; }
+  let ok = false;
+  try { ok = !!(await window.electronAPI.enableInputLock()); } catch {}
+  sess.inputLocked = ok;
+  if (!ok) sendPrivacyResult(sess, "lock-input", true, false, "admin");
+}
+
+// Viewer: the host refused or couldn't apply black screen / input lock — undo the optimistic toggle and say why.
+function onPrivacyResult(sess, ev) {
+  if (ev.ok) return;
+  if (ev.feature === "lock-input") { sess.inputLocked = false; if (sess === active) $("#btn-lock-input").classList.remove("active"); }
+  else if (ev.feature === "black-screen") { sess.blackScreenActive = false; if (sess === active) $("#btn-blackscreen").classList.remove("active"); }
+  else return;
+  const what = ev.feature === "lock-input" ? "Kunci input" : "Layar gelap";
+  showToast(ev.reason === "admin"
+    ? `${what} gagal: TryDesk di PC remote harus dijalankan sebagai administrator`
+    : `${what} ditolak: PC remote hanya mengizinkan mode lihat saja`);
 }
 
 function toggleLockInput() {
@@ -1622,7 +1726,7 @@ async function takeScreenshot() {
 }
 
 // ─── Session recording (viewer) ───────────────────────────
-let mediaRecorder = null, recordChunks = [], recordingActive = false;
+let mediaRecorder = null, recordChunks = [], recordingActive = false, recordingSess = null;   // the tab being recorded
 function isRecording() { return recordingActive; }
 function toggleRecording() { recordingActive ? stopRecording() : startRecording(); }
 
@@ -1641,11 +1745,13 @@ function startRecording() {
   mediaRecorder.onstop = saveRecording;
   mediaRecorder.start(1000);
   recordingActive = true;
+  recordingSess = active;
   showRecordingIndicator(true);
   showToast("Mulai merekam sesi");
 }
 
 function stopRecording() {
+  recordingSess = null;
   if (!mediaRecorder) { recordingActive = false; showRecordingIndicator(false); return; }
   recordingActive = false;
   showRecordingIndicator(false);
@@ -1686,10 +1792,14 @@ function startClipboardSync(sess) {
   sess.lastClipboard = null;
   sess.clipTimer = setInterval(async () => {
     if (!clipboardSync || !sess.dataChannel || sess.dataChannel.readyState !== "open") return;
+    // The host's "allow clipboard" permission covers BOTH directions — never hand this PC's clipboard
+    // (passwords, tokens…) to a viewer when the host switched clipboard sharing off.
+    if (sess.role === "host" && !allowClipboardPref) return;
     let text; try { text = await window.electronAPI.clipboardRead(); } catch { return; }
-    if (text != null && text !== sess.lastClipboard && text.length <= 2_000_000) {
+    // A data-channel message tops out at 256 KB; bigger text would throw on every tick, so skip it.
+    if (text != null && text !== sess.lastClipboard && new Blob([text]).size <= 250_000) {
       sess.lastClipboard = text;
-      sess.dataChannel.send(JSON.stringify({ __ctrl: "clipboard", text }));
+      try { sess.dataChannel.send(JSON.stringify({ __ctrl: "clipboard", text })); } catch {}
     }
   }, 1200);
 }
@@ -1720,7 +1830,7 @@ function fileBusy(sess) { return !!(sess.activeSend || sess.activeRecv); }
 async function chooseSavePath(name) { return window.electronAPI.fileSaveDialog(name); }
 
 async function startSendFiles() {
-  const sess = active || host;
+  const sess = curChatSess();
   if (!sess || !sess.fileChannel || sess.fileChannel.readyState !== "open") return showToast("Belum siap untuk transfer");
   const files = await window.electronAPI.filePick();
   for (const f of files) {
@@ -1778,6 +1888,7 @@ async function onFileControl(sess, ev) {
     const card = createCard(sess, ev.id, { dir: "recv", name: ev.name, size: ev.size, incoming: true });
     card.onAccept = async () => {
       const savePath = await chooseSavePath(ev.name);
+      if (!card.el.isConnected) return;   // the sender withdrew the offer while the save dialog was open
       if (!savePath) { ch.send(JSON.stringify({ t: "reject", id: ev.id })); card.remove(); return; }
       const writeId = await window.electronAPI.fileOpenWrite(savePath);
       sess.activeRecv = { id: ev.id, size: ev.size, received: 0, writeId, filePath: savePath, canceled: false, card };
@@ -1801,6 +1912,9 @@ async function onFileControl(sess, ev) {
       sess.activeRecv.card.setSub("Dibatalkan pengirim"); sess.activeRecv.card.finish(false);
       sess.activeRecv = null;
     } else if (sess.activeSend && sess.activeSend.id === ev.id) { sess.activeSend.canceled = true; }
+    else if (typeof ev.id === "string") {   // the sender withdrew an offer we hadn't answered yet
+      $(`#transfer-stack .transfer-card[data-sid="${sess.sid}"][data-id="${CSS.escape(ev.id)}"]`)?.remove();
+    }
   }
   // ── File manager protocol (dual-pane queue; no save dialogs) ──
   else if (ev.t === "m-put") {
@@ -1944,9 +2058,16 @@ function createCard(sess, id, { dir, name, size, incoming }) {
     remove() { el.remove(); },
   };
 
+  let answered = false;   // incoming offer: Accept/Reject already chosen
   el.querySelector(".tc-close").addEventListener("click", () => {
-    if (dir === "send" && sess.activeSend && sess.activeSend.id === id) sess.activeSend.canceled = true;
+    if (dir === "send" && sess.activeSend && sess.activeSend.id === id) {
+      sess.activeSend.canceled = true;
+      // Still waiting for the receiver: withdraw the offer and stop waiting — otherwise the send never ends
+      // and the session stays "busy" for every later transfer.
+      if (sess.acceptResolver) { try { sess.fileChannel.send(JSON.stringify({ t: "cancel", id })); } catch {} sess.acceptResolver(false); }
+    }
     if (dir === "recv" && sess.activeRecv && sess.activeRecv.id === id) { sess.fileChannel.send(JSON.stringify({ t: "cancel", id })); window.electronAPI.fileCloseWrite(sess.activeRecv.writeId, true, sess.activeRecv.filePath); sess.activeRecv = null; }
+    else if (incoming && !answered && ctrl.onReject) { answered = true; ctrl.onReject(); return; }   // closing an unanswered offer = reject it
     ctrl.remove();
   });
 
@@ -1954,8 +2075,8 @@ function createCard(sess, id, { dir, name, size, incoming }) {
     actions.style.display = "";
     const acc = document.createElement("button"); acc.className = "tc-btn accept"; acc.textContent = "Terima";
     const rej = document.createElement("button"); rej.className = "tc-btn"; rej.textContent = "Tolak";
-    acc.addEventListener("click", () => ctrl.onAccept && ctrl.onAccept());
-    rej.addEventListener("click", () => ctrl.onReject && ctrl.onReject());
+    acc.addEventListener("click", () => { if (answered) return; answered = true; ctrl.onAccept && ctrl.onAccept(); });
+    rej.addEventListener("click", () => { if (answered) return; answered = true; ctrl.onReject && ctrl.onReject(); });
     actions.append(acc, rej);
     sub.textContent = `${fmtBytes(size)} · ingin dikirim`;
   }
@@ -2189,49 +2310,61 @@ function fmCancelItem(i) {
   if (i.status === "active") {
     try { fmSess.fileChannel.send(JSON.stringify({ t: "m-cancel", id: i.id })); } catch {}
     if (fmSess.activeSend && fmSess.activeSend.id === i.id) fmSess.activeSend.canceled = true;
-    if (i._reject) i._reject(new Error("canceled"));   // unblock the in-flight transfer promise
-    return;                                            // fmStartQueue's catch will mark it canceled and re-render
+    if (i._wake) i._wake();   // end whatever the transfer is waiting on, so its cleanup runs
+    return;                   // fmStartQueue's catch will mark it canceled and re-render
   }
   i.status = "canceled";
   fmRenderQueue();
 }
 
+// The queue belongs to the session it was started on — captured once, because fmSess changes when the user
+// opens the file manager on another tab while this queue is still running.
 async function fmStartQueue() {
-  if (fmSess.fmRunning) return;
-  if (!fmSess.fileChannel || fmSess.fileChannel.readyState !== "open") { showToast("Sesi transfer belum siap"); return; }
-  fmSess.fmRunning = true;
+  const sess = fmSess;
+  if (!sess || sess.fmRunning) return;
+  if (!sess.fileChannel || sess.fileChannel.readyState !== "open") { showToast("Sesi transfer belum siap"); return; }
+  sess.fmRunning = true;
   $("#fm-start-btn").disabled = true;
+  const render = () => { if (fmSess === sess) fmRenderQueue(); };
   try {
     while (true) {
-      const item = fmSess.fmQueue.find((i) => i.status === "queued");
+      const item = sess.fmQueue.find((i) => i.status === "queued");
       if (!item) break;
       if (item.canceled) { item.status = "canceled"; continue; }
       item.status = "active"; item.sent = 0; item._lastTs = null; item.speed = 0;
-      fmRenderQueue();
+      render();
       try {
-        if (item.dir === "up") await fmUpload(item);
-        else await fmDownload(item);
+        if (item.dir === "up") await fmUpload(item, sess);
+        else await fmDownload(item, sess);
         if (!item.canceled) { item.status = "done"; item.sent = item.size; }
       } catch (e) {
         if (item.canceled) item.status = "canceled";
         else { item.status = "error"; item.err = String(e && e.message || e).slice(0, 40); }
       }
-      fmRenderQueue();
+      render();
     }
   } finally {
-    if (fmSess) fmSess.fmRunning = false;
-    fmRenderQueue();
+    sess.fmRunning = false;
+    render();
   }
 }
 
-function fmUpload(item) {
-  const sess = fmSess;
+// Each wait inside a transfer is registered as item._wake so a cancel can end it: the transfer then throws
+// "canceled" through its own catch, which closes the file, deletes a partial download and frees the session.
+// (Rejecting the outer promise directly left those cleanups — and the session's busy flag — hanging.)
+function fmWait(item, setup) {
+  return new Promise((resolve, reject) => {
+    item._wake = () => reject(new Error("canceled"));
+    setup(resolve);
+  }).finally(() => { item._wake = null; });
+}
+
+function fmUpload(item, sess) {
   return new Promise(async (resolve, reject) => {
-    item._reject = reject;
     sess.activeSend = { id: item.id, canceled: false, paused: false, mgr: true };
     let readId;
     try {
-      const ackP = new Promise((r) => { sess.activeSend.onAck = r; });
+      const ackP = fmWait(item, (r) => { sess.activeSend.onAck = r; });
       sess.fileChannel.send(JSON.stringify({ t: "m-put", id: item.id, name: item.name, size: item.size, destDir: item.destDir }));
       const ack = await ackP;
       if (!ack.ok) throw new Error(ack.err === "busy" ? "Sibuk" : (ack.err || "ditolak"));
@@ -2240,7 +2373,7 @@ function fmUpload(item) {
       const doneP = new Promise((r) => { sess.activeSend.onDone = r; });
       while (true) {
         if (item.canceled || sess.activeSend.canceled) throw new Error("canceled");
-        while (item.paused) await sleep(120);
+        while (item.paused && !item.canceled) await sleep(120);
         const { done, chunk } = await window.electronAPI.fileReadChunk(readId, CHUNK);
         if (done) break;
         while (sess.fileChannel.bufferedAmount > BUFFER_HIGH) await sleep(20);
@@ -2250,10 +2383,9 @@ function fmUpload(item) {
       }
       await window.electronAPI.fileCloseRead(readId); readId = null;
       sess.fileChannel.send(JSON.stringify({ t: "m-done", id: item.id }));
-      await doneP;
+      await fmWait(item, (r) => doneP.then(r));
       sess.activeSend = null;
-      item._reject = null;
-      fmRefreshSide("remote");
+      if (fmSess === sess) fmRefreshSide("remote");
       resolve();
     } catch (e) {
       if (readId) { try { await window.electronAPI.fileCloseRead(readId); } catch {} }
@@ -2264,17 +2396,15 @@ function fmUpload(item) {
   });
 }
 
-function fmDownload(item) {
-  const sess = fmSess;
+function fmDownload(item, sess) {
   return new Promise(async (resolve, reject) => {
-    item._reject = reject;
     try {
-      const gotP = new Promise((r) => { sess.mgrGetAck = { id: item.id, resolve: r }; });
+      const gotP = fmWait(item, (r) => { sess.mgrGetAck = { id: item.id, resolve: r }; });
       sess.fileChannel.send(JSON.stringify({ t: "m-get", id: item.id, remotePath: item.srcPath, name: item.name, size: item.size }));
       const got = await gotP; sess.mgrGetAck = null;
       if (!got.ok) throw new Error(got.err === "busy" ? "Sibuk" : (got.err || "gagal"));
       const { id: writeId, path: filePath } = await window.electronAPI.fileOpenWriteIn(item.destDir, item.name);
-      const doneP = new Promise((r) => { item._dlDone = r; });
+      const doneP = fmWait(item, (r) => { item._dlDone = r; });
       sess.activeRecv = {
         id: item.id, size: item.size, received: 0, writeId, filePath, mgr: true,
         onDone: () => item._dlDone && item._dlDone(),
@@ -2282,8 +2412,7 @@ function fmDownload(item) {
       };
       sess.fileChannel.send(JSON.stringify({ t: "m-ready", id: item.id }));
       await doneP;
-      item._reject = null;
-      fmRefreshSide("local");
+      if (fmSess === sess) fmRefreshSide("local");
       resolve();
     } catch (e) {
       if (sess.activeRecv && sess.activeRecv.id === item.id) { try { await window.electronAPI.fileCloseWrite(sess.activeRecv.writeId, true, sess.activeRecv.filePath); } catch {} sess.activeRecv = null; }
@@ -2301,7 +2430,7 @@ function fmRefreshSide(side) {
 
 // ── Open / close ───────────────────────────────────────────
 function openFileManager() {
-  const sess = active || host;
+  const sess = curChatSess();
   if (!sess || !sess.fileChannel || sess.fileChannel.readyState !== "open") { showToast("Transfer file butuh sesi aktif"); return; }
   fmSess = sess;
   closeAllMenus();
@@ -2501,6 +2630,7 @@ function normalizedPoint(e) {
   return { x, y };
 }
 const BUTTONS = ["left", "middle", "right"];
+const remoteButtonsDown = new Set();   // buttons pressed on the remote screen and not yet released there
 let panning = false, panStart = null;
 
 // ── Game mode: pointer-lock + relative mouse (for Minecraft/FPS and any pointer-capturing game) ──
@@ -2643,15 +2773,29 @@ function setupInputCapture() {
     }
     const p = normalizedPoint(e); if (!p) return;
     sendInput({ action: "mousemove", ...p });
-    sendInput({ action: "mousedown", button: BUTTONS[e.button] || "left" });
+    const b = BUTTONS[e.button] || "left";
+    remoteButtonsDown.add(b);
+    sendInput({ action: "mousedown", button: b });
   });
   const endPan = () => { if (panning) { panning = false; container.classList.remove("panning"); } };
   container.addEventListener("mouseup", (e) => {
     if (gameMode && document.pointerLockElement === container) { sendInput({ action: "mouseup", button: BUTTONS[e.button] || "left" }); return; }
     if (panning) return endPan();
-    sendInput({ action: "mouseup", button: BUTTONS[e.button] || "left" });
+    const b = BUTTONS[e.button] || "left";
+    remoteButtonsDown.delete(b);
+    sendInput({ action: "mouseup", button: b });
   });
-  window.addEventListener("mouseup", endPan);
+  // A drag that started on the remote screen but is released over the tab strip / session bar (outside the
+  // video) must still release the button on the host, or it stays held and every later move drags.
+  window.addEventListener("mouseup", (e) => {
+    endPan();
+    const b = BUTTONS[e.button] || "left";
+    if (remoteButtonsDown.has(b) && !container.contains(e.target)) { remoteButtonsDown.delete(b); sendInput({ action: "mouseup", button: b }); }
+  });
+  window.addEventListener("blur", () => {
+    for (const b of remoteButtonsDown) sendInput({ action: "mouseup", button: b });
+    remoteButtonsDown.clear();
+  });
   container.addEventListener("contextmenu", (e) => e.preventDefault());
   container.addEventListener("wheel", (e) => {
     e.preventDefault();

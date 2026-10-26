@@ -165,6 +165,13 @@ function createWindow() {
   let _reloaded = false;
   mainWindow.webContents.on("render-process-gone", (_e, d) => {
     logCrash("render-process-gone", d && d.reason);
+    // The page that owned them is gone: drop every native effect it had switched on, or the black screen,
+    // BlockInput, game-mode mouse trap and held keys would outlive it (and the reloaded page knows nothing).
+    try { disableBlackScreen(); } catch {}
+    try { disableInputLock(); } catch {}
+    try { if (inputReady) inputSim.releaseAll(); } catch {}
+    try { _kbWantCapture = false; refreshKeyHook(); } catch {}
+    try { _mouseWant = false; inputSim.stopMouseHook && inputSim.stopMouseHook(); } catch {}
     if (!_reloaded) { _reloaded = true; try { mainWindow.reload(); } catch {} }
   });
   // Lock navigation down: the app is a single local page. Block opening child windows and block
@@ -446,9 +453,14 @@ ipcMain.on("execute-input", (_e, event) => {
         // Viewer sends coordinates normalized to 0..1 of the captured monitor
         let d = captureDisplay;
         if (!d) { const p = screen.getPrimaryDisplay(); d = { boundsX: 0, boundsY: 0, width: p.size.width, height: p.size.height, scaleFactor: p.scaleFactor }; }
-        const x = (d.boundsX + event.x * d.width) * d.scaleFactor;
-        const y = (d.boundsY + event.y * d.height) * d.scaleFactor;
-        inputSim.moveMouse(x, y);
+        // Clamp just inside the monitor so the far edge doesn't resolve to the neighbouring display.
+        const nx = Math.min(Math.max(Number(event.x) || 0, 0), 0.9999), ny = Math.min(Math.max(Number(event.y) || 0, 0), 0.9999);
+        const dip = { x: d.boundsX + nx * d.width, y: d.boundsY + ny * d.height };
+        // DIP → physical pixels. Multiplying by ONE display's scale is only right when every monitor shares
+        // it; with mixed DPI (e.g. 4K@200% next to 1080p@100%) clicks landed on the wrong monitor.
+        // dipToScreenPoint (Windows) resolves the point against the display it actually lies on.
+        const p = screen.dipToScreenPoint ? screen.dipToScreenPoint(dip) : { x: dip.x * d.scaleFactor, y: dip.y * d.scaleFactor };
+        inputSim.moveMouse(p.x, p.y);
         break;
       }
       case "mousemove-rel": {
@@ -466,6 +478,9 @@ ipcMain.on("execute-input", (_e, event) => {
     console.error("Input execution error:", err.message);
   }
 });
+
+// Session ended or the link dropped: let go of every key/button the remote still holds on this PC.
+ipcMain.on("release-remote-input", () => { if (inputReady) { try { inputSim.releaseAll(); } catch {} } });
 
 // ─── Clipboard ────────────────────────────────────────────
 ipcMain.handle("clipboard-read", () => clipboard.readText());
@@ -621,6 +636,10 @@ function enableBlackScreen() {
       webPreferences: { nodeIntegration: false, contextIsolation: true },
     });
     win.setAlwaysOnTop(true, "screen-saver");
+    // Windows clamps a new window to the size limits of the display it starts on, so a portrait monitor's
+    // overlay came out 1080x1080 and left the lower part of the screen visible. Re-apply the exact bounds now
+    // that the window sits on its own display.
+    try { win.setBounds(display.bounds); } catch {}
     win.loadURL("data:text/html,<body style=\"background:#000;margin:0;cursor:none;overflow:hidden\"><div style=\"display:flex;align-items:center;justify-content:center;height:100vh;color:%23333;font-family:sans-serif;font-size:14px\">TryDesk - Layar digelapkan</div></body>");
     try {
       const hwndBuf = win.getNativeWindowHandle();
@@ -644,10 +663,12 @@ ipcMain.handle("disable-black-screen", () => { disableBlackScreen(); return true
 // ─── Lock host input ──────────────────────────────────────
 let inputLockActive = false;
 
+// Returns whether the lock really took: Win32 BlockInput fails without administrator rights, and the viewer
+// must not be told the host is locked when it isn't.
 function enableInputLock() {
-  if (inputLockActive) return;
-  inputLockActive = true;
-  inputSim.blockInput(true);
+  if (inputLockActive) return true;
+  inputLockActive = !!inputSim.blockInput(true);
+  return inputLockActive;
 }
 
 function disableInputLock() {
@@ -656,7 +677,7 @@ function disableInputLock() {
   try { inputSim.blockInput(false); } catch {}
 }
 
-ipcMain.handle("enable-input-lock", () => { enableInputLock(); return true; });
+ipcMain.handle("enable-input-lock", () => enableInputLock());
 ipcMain.handle("disable-input-lock", () => { disableInputLock(); return true; });
 
 app.on("will-quit", () => { disableBlackScreen(); disableInputLock(); });

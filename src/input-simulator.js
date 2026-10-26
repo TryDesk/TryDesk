@@ -74,12 +74,21 @@ function moveMouseRelative(dx, dy) {
   if (dx || dy) mouse_event(MOUSEEVENTF_MOVE, dx, dy, 0, 0);
 }
 
+// Keys/buttons the REMOTE currently holds down on this machine. If the session drops mid-press (viewer closed,
+// network lost), nothing would ever send the "up" — Shift or a dragging left button stayed down on the host.
+// releaseAll() lets the host let go of everything when a session ends.
+const _heldKeys = new Set(), _heldButtons = new Set();
+
 function mouseDown(button) {
-  mouse_event((MOUSE_FLAGS[button] || MOUSE_FLAGS.left)[0], 0, 0, 0, 0);
+  const b = MOUSE_FLAGS[button] ? button : "left";
+  _heldButtons.add(b);
+  mouse_event(MOUSE_FLAGS[b][0], 0, 0, 0, 0);
 }
 
 function mouseUp(button) {
-  mouse_event((MOUSE_FLAGS[button] || MOUSE_FLAGS.left)[1], 0, 0, 0, 0);
+  const b = MOUSE_FLAGS[button] ? button : "left";
+  _heldButtons.delete(b);
+  mouse_event(MOUSE_FLAGS[b][1], 0, 0, 0, 0);
 }
 
 function mouseScroll(deltaX, deltaY) {
@@ -94,10 +103,17 @@ function sendKey(vk, up) {
   let flags = up ? KEYEVENTF_KEYUP : 0;
   if (EXTENDED_VK.has(vk)) flags |= KEYEVENTF_EXTENDEDKEY;
   keybd_event(vk, scan, flags, 0);
+  if (up) _heldKeys.delete(vk); else _heldKeys.add(vk);
 }
 
 const keyDown = (vk) => sendKey(vk, false);
 const keyUp = (vk) => sendKey(vk, true);
+
+function releaseAll() {
+  for (const vk of [..._heldKeys]) { try { sendKey(vk, true); } catch {} }
+  for (const b of [..._heldButtons]) { try { mouseUp(b); } catch {} }
+  _heldKeys.clear(); _heldButtons.clear();
+}
 
 function setWindowDisplayAffinity(hwnd, affinity) {
   if (_SetWindowDisplayAffinity) return _SetWindowDisplayAffinity(hwnd, affinity);
@@ -193,4 +209,4 @@ function isCursorHidden() {
 }
 
 function isElevated() { try { return IsUserAnAdmin ? !!IsUserAnAdmin() : false; } catch { return false; } }
-module.exports = { init, moveMouse, moveMouseRelative, mouseDown, mouseUp, mouseScroll, keyDown, keyUp, setWindowDisplayAffinity, blockInput, isCursorHidden, startKeyHook, stopKeyHook, startMouseHook, stopMouseHook, setMouseCenter, isElevated };
+module.exports = { init, moveMouse, moveMouseRelative, mouseDown, mouseUp, mouseScroll, keyDown, keyUp, releaseAll, setWindowDisplayAffinity, blockInput, isCursorHidden, startKeyHook, stopKeyHook, startMouseHook, stopMouseHook, setMouseCenter, isElevated };

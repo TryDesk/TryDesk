@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   setDisplayMediaSource: (id, displayId) => ipcRenderer.invoke("set-dm-source", id, displayId),
   setCaptureDisplay: (d) => ipcRenderer.send("set-capture-display", d),
   executeInput: (event) => ipcRenderer.send("execute-input", event),
+  releaseRemoteInput: () => ipcRenderer.send("release-remote-input"),
   focusWindow: () => ipcRenderer.send("focus-window"),
   minimizeWindow: () => ipcRenderer.send("minimize-window"),
   maximizeWindow: () => ipcRenderer.send("maximize-window"),

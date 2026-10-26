@@ -89,7 +89,7 @@ App client **tidak perlu di-build ulang**, karena tetap memakai `desk.trydesk.ai
 - **Tombol**: kirim kombinasi — Ctrl+Alt+Del*, Alt+Tab, Win, Win+D, Win+E, Ctrl+Esc, Alt+F4, PrintScreen.
 - **Screenshot**: ambil frame remote → simpan PNG.
 - **Lihat saja**: nonaktifkan kontrol (hanya menonton).
-- **Layar hitam** & **Kunci input**: privasi host saat maintenance.
+- **Layar hitam** & **Kunci input**: privasi host saat maintenance. Kunci input butuh TryDesk host berjalan sebagai administrator dan selalu bisa dilepas dengan Ctrl+Alt+Del; keduanya ditolak bila host memakai mode lihat saja.
 
 \* Ctrl+Alt+Del asli dilindungi Windows (secure attention) dan umumnya tidak bisa disuntik app biasa — perlu hak admin/helper service. Tombol lain bekerja normal.
 
