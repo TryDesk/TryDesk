@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#E4312B</color>
+    <!-- matches the app's bg-primary token, so launch to first paint has no white flash -->
+    <color name="td_background">#0F1012</color>
+</resources>

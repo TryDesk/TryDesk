@@ -1,0 +1,21 @@
+TryDesk — free, open-source remote desktop
+Copyright (C) 2026 DrWeabo <owner@trydesk.ai.id>
+https://trydesk.ai.id
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU Affero General Public License as published by the Free
+Software Foundation, version 3 (AGPL-3.0-only). See the LICENSE file.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU Affero General Public License for more details.
+
+Licence history: TryDesk 1.1.1 and earlier were released under the MIT License;
+those copies stay MIT. TryDesk 1.2.0 and later are released under AGPL-3.0-only.
+
+The "TryDesk" name and logo are trademarks of DrWeabo and are NOT covered by the
+licence above. See TRADEMARK.md before publishing a modified version.
+
+If you redistribute TryDesk or a modified version, keep this NOTICE file, the
+LICENSE file and the copyright notices in the program (including the
+"Made by DrWeabo" credit in the About screen).

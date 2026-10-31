@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launch screen: the app's dark background with the TryDesk mark on a red tile. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/td_background" />
+    <item android:width="96dp" android:height="96dp" android:gravity="center">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/ic_launcher_background" />
+            <corners android:radius="24dp" />
+        </shape>
+    </item>
+    <item android:width="96dp" android:height="96dp" android:gravity="center" android:drawable="@drawable/ic_launcher_foreground" />
+</layer-list>

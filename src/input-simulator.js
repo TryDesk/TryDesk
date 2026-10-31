@@ -1,5 +1,7 @@
-let SetCursorPos, mouse_event, keybd_event, MapVirtualKeyW, _SetWindowDisplayAffinity, _BlockInput, GetCursorInfo;
+let SetCursorPos, mouse_event, keybd_event, MapVirtualKeyW, _SetWindowDisplayAffinity, _BlockInput, GetCursorInfo, _LockWorkStation;
+let _SendInput;      // KEYEVENTF_UNICODE text (phone keyboards send characters, not key codes)
 let IsUserAnAdmin;   // shell32 — true when the host process is elevated (can inject input into admin/UAC windows)
+let _fg;             // user32/kernel32/advapi32 calls for isForegroundElevated()
 // Low-level keyboard + mouse hooks (so system shortcuts reach the remote even outside fullscreen, and so
 // games get true relative mouse motion without the browser's pointer-lock gesture).
 let _koffi, _HookProc, _KBD, _MSLL, SetWindowsHookExW, UnhookWindowsHookEx, CallNextHookEx, GetModuleHandleW;
@@ -31,17 +33,38 @@ function init() {
     // Win32 BlockInput takes a BOOL (4-byte int); binding as `int` avoids a width mismatch
     // that could leave input permanently blocked when unblocking.
     _BlockInput = user32.func("int BlockInput(int fBlockIt)");
+    _LockWorkStation = user32.func("int LockWorkStation()");
     // Detect when a game/app has captured (hidden) the OS cursor, so the viewer can switch to
     // relative-mouse mode automatically. Isolated so a koffi/struct hiccup never disables core input.
     try {
       koffi.struct("CURSORINFO", { cbSize: "uint32", flags: "uint32", hCursor: "uintptr", ptX: "int32", ptY: "int32" });
       GetCursorInfo = user32.func("bool GetCursorInfo(_Inout_ CURSORINFO *pci)");
     } catch (e) { console.warn("GetCursorInfo unavailable:", e.message); GetCursorInfo = null; }
+    // SendInput with KEYEVENTF_UNICODE types any character (symbols, accents, emoji) regardless of the host's
+    // keyboard layout. INPUT on x64 is 40 bytes: type(4) + pad(4) + the 32-byte union (KEYBDINPUT is 24).
+    try {
+      const KI = koffi.struct("TD_KEYBDINPUT", { wVk: "uint16", wScan: "uint16", dwFlags: "uint32", time: "uint32", dwExtraInfo: "uintptr" });
+      koffi.struct("TD_INPUT_KI", { type: "uint32", ki: KI, _pad: koffi.array("uint8", 8) });
+      _SendInput = user32.func("uint32_t SendInput(uint32_t cInputs, TD_INPUT_KI *pInputs, int cbSize)");
+    } catch (e) { console.warn("SendInput unavailable:", e.message); _SendInput = null; }
     // Elevation check — a non-elevated host can't inject input into elevated windows (admin CMD, UAC prompt):
     // UIPI silently drops it, so the remote "freezes" (video keeps working, control stops). Lets the UI offer
     // "run as administrator" so the user can control those windows too.
     try { const shell32 = koffi.load("shell32.dll"); IsUserAnAdmin = shell32.func("bool IsUserAnAdmin()"); }
     catch (e) { console.warn("IsUserAnAdmin unavailable:", e.message); IsUserAnAdmin = null; }
+    // Which process owns the foreground window, and is it elevated? (Task Manager, admin CMD...) A medium-integrity
+    // process may query an elevated one with PROCESS_QUERY_LIMITED_INFORMATION + TOKEN_QUERY.
+    try {
+      const kernel32 = koffi.load("kernel32.dll"), advapi32 = koffi.load("advapi32.dll");
+      _fg = {
+        GetForegroundWindow: user32.func("uintptr_t GetForegroundWindow()"),
+        GetWindowThreadProcessId: user32.func("uint32_t GetWindowThreadProcessId(uintptr_t hWnd, _Out_ uint32_t *pid)"),
+        OpenProcess: kernel32.func("uintptr_t OpenProcess(uint32_t access, bool inherit, uint32_t pid)"),
+        CloseHandle: kernel32.func("bool CloseHandle(uintptr_t h)"),
+        OpenProcessToken: advapi32.func("bool OpenProcessToken(uintptr_t proc, uint32_t access, _Out_ uintptr_t *token)"),
+        GetTokenInformation: advapi32.func("bool GetTokenInformation(uintptr_t token, int cls, _Out_ uint32_t *info, uint32_t len, _Out_ uint32_t *ret)"),
+      };
+    } catch (e) { console.warn("foreground elevation check unavailable:", e.message); _fg = null; }
     // Low-level keyboard hook — lets the viewer capture + forward system shortcuts (Alt+Tab, Win,
     // Alt+Esc, Ctrl+Esc) to the remote even when NOT fullscreen (the browser's keyboard.lock is
     // fullscreen-only). Isolated so a koffi hiccup never disables core input.
@@ -109,6 +132,24 @@ function sendKey(vk, up) {
 const keyDown = (vk) => sendKey(vk, false);
 const keyUp = (vk) => sendKey(vk, true);
 
+// Type text as Unicode keystrokes (one down+up per UTF-16 unit; Windows pairs surrogates itself).
+// Enter / Tab go through as real keys so apps see a normal Return / Tab.
+const KEYEVENTF_UNICODE = 0x0004;
+function typeText(text) {
+  const s = String(text || "").slice(0, 2000);
+  for (const ch of s) {
+    if (ch === "\n" || ch === "\r") { if (ch === "\n") { sendKey(0x0D, false); sendKey(0x0D, true); } continue; }
+    if (ch === "\t") { sendKey(0x09, false); sendKey(0x09, true); continue; }
+    if (!_SendInput) continue;
+    for (let i = 0; i < ch.length; i++) {
+      const u = ch.charCodeAt(i);
+      for (const up of [0, KEYEVENTF_KEYUP]) {
+        _SendInput(1, { type: 1, ki: { wVk: 0, wScan: u, dwFlags: KEYEVENTF_UNICODE | up, time: 0, dwExtraInfo: 0 }, _pad: [0, 0, 0, 0, 0, 0, 0, 0] }, 40);
+      }
+    }
+  }
+}
+
 function releaseAll() {
   for (const vk of [..._heldKeys]) { try { sendKey(vk, true); } catch {} }
   for (const b of [..._heldButtons]) { try { mouseUp(b); } catch {} }
@@ -141,6 +182,9 @@ function startKeyHook(onKey) {
       try {
         if (nCode === 0 && _onKey) {
           const ks = _koffi.decode(lParam, _KBD);
+          // Injected keys (LLKHF_INJECTED) come from software — e.g. this PC's own remote viewer typing while it is
+          // also hosting. They belong to this machine: never swallow and forward them to another remote.
+          if (ks.flags & 0x10) return CallNextHookEx(0, nCode, wParam, lParam);
           const down = (wParam === 0x100 || wParam === 0x104);   // WM_KEYDOWN / WM_SYSKEYDOWN
           const up = (wParam === 0x101 || wParam === 0x105);     // WM_KEYUP / WM_SYSKEYUP
           if ((down || up) && _onKey(ks.vkCode, down)) return 1; // 1 = swallow the key locally
@@ -177,6 +221,7 @@ function startMouseHook(onMouse, shouldCapture) {
         if (nCode === 0 && _onMouse && (!_shouldMouse || _shouldMouse())) {
           const w = wParam;
           const ms = _koffi.decode(lParam, _MSLL);
+          if (ms.flags & 0x01) return CallNextHookEx(0, nCode, wParam, lParam);   // LLMHF_INJECTED: same reason as keys
           if (w === 0x200) {                                   // WM_MOUSEMOVE
             const dx = ms.ptX - _mcx, dy = ms.ptY - _mcy;
             if (dx || dy) { _onMouse({ t: "move", dx, dy }); try { SetCursorPos(_mcx, _mcy); } catch {} }
@@ -202,11 +247,30 @@ function stopMouseHook() {
 }
 
 // True when the OS cursor is hidden — i.e. a game/app has captured the pointer (reads relative motion).
+// A failed call (Windows refusing us, e.g. over an admin window) is "don't know", not "hidden".
 function isCursorHidden() {
   if (!GetCursorInfo) return false;
-  try { const ci = { cbSize: 24, flags: 0, hCursor: 0, ptX: 0, ptY: 0 }; GetCursorInfo(ci); return (ci.flags & 1) === 0; }
+  try { const ci = { cbSize: 24, flags: 0, hCursor: 0, ptX: 0, ptY: 0 }; if (!GetCursorInfo(ci)) return false; return (ci.flags & 1) === 0; }
   catch { return false; }
 }
 
 function isElevated() { try { return IsUserAnAdmin ? !!IsUserAnAdmin() : false; } catch { return false; } }
-module.exports = { init, moveMouse, moveMouseRelative, mouseDown, mouseUp, mouseScroll, keyDown, keyUp, releaseAll, setWindowDisplayAffinity, blockInput, isCursorHidden, startKeyHook, stopKeyHook, startMouseHook, stopMouseHook, setMouseCenter, isElevated };
+// True when the window in front belongs to an elevated process. A non-elevated TryDesk can't click or type into
+// it (Windows UIPI drops the input) and can't see the cursor over it — the viewer must be told why.
+function isForegroundElevated() {
+  if (!_fg) return false;
+  let proc = 0, token = 0;
+  try {
+    const hwnd = _fg.GetForegroundWindow(); if (!hwnd) return false;
+    const pid = [0]; _fg.GetWindowThreadProcessId(hwnd, pid); if (!pid[0] || pid[0] === process.pid) return false;
+    proc = _fg.OpenProcess(0x1000, false, pid[0]); if (!proc) return false;   // PROCESS_QUERY_LIMITED_INFORMATION
+    const t = [0]; if (!_fg.OpenProcessToken(proc, 0x0008, t)) return false;  // TOKEN_QUERY
+    token = t[0];
+    const v = [0], len = [0];
+    return _fg.GetTokenInformation(token, 20, v, 4, len) && v[0] !== 0;      // TokenElevation
+  } catch { return false; }
+  finally { try { token && _fg.CloseHandle(token); } catch {} try { proc && _fg.CloseHandle(proc); } catch {} }
+}
+// "Lock Windows after the session ends" — the same as Win+L.
+function lockWorkStation() { try { return _LockWorkStation ? !!_LockWorkStation() : false; } catch { return false; } }
+module.exports = { init, moveMouse, moveMouseRelative, mouseDown, mouseUp, mouseScroll, keyDown, keyUp, typeText, releaseAll, lockWorkStation, setWindowDisplayAffinity, blockInput, isCursorHidden, startKeyHook, stopKeyHook, startMouseHook, stopMouseHook, setMouseCenter, isElevated, isForegroundElevated };

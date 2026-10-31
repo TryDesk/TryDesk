@@ -57,12 +57,16 @@ if [ -f .env ] && grep -q '^TURN_SECRET=' .env; then
 else
   TURN_SECRET="$(openssl rand -hex 32)"
 fi
+# Any other settings you added to .env yourself are kept across re-runs.
+EXTRA_ENV=""
+[ -f .env ] && EXTRA_ENV="$(grep -vE '^(DESK_DOMAIN|TURN_DOMAIN|TURN_SECRET|TURN_PORT)=' .env || true)"
 cat > .env <<EOF
 DESK_DOMAIN=$DESK_DOMAIN
 TURN_DOMAIN=$TURN_DOMAIN
 TURN_SECRET=$TURN_SECRET
 TURN_PORT=$TURN_PORT
 EOF
+[ -n "$EXTRA_ENV" ] && printf '%s\n' "$EXTRA_ENV" >> .env
 chmod 600 .env
 
 cat > turnserver.conf <<EOF
@@ -97,7 +101,10 @@ denied-peer-ip=::1
 denied-peer-ip=fc00::-fdff:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 denied-peer-ip=fe80::-febf:ffff:ffff:ffff:ffff:ffff:ffff:ffff
 EOF
-chmod 600 turnserver.conf   # holds the TURN static-auth-secret — keep it root-only (coturn reads as root)
+# Holds the TURN static-auth-secret: readable only by root and the coturn image's user (nobody, 65534).
+# Root-only 600 is NOT enough: coturn then silently falls back to defaults (port 3478, no secret).
+chown 65534:65534 turnserver.conf
+chmod 600 turnserver.conf
 
 echo "==> [5/6] Firewall (ufw)"
 if [ "${SKIP_FIREWALL:-0}" = "1" ]; then

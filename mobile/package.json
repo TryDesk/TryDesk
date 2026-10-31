@@ -1,0 +1,21 @@
+{
+  "name": "trydesk-android",
+  "version": "1.1.0",
+  "private": true,
+  "description": "TryDesk for Android — control a Windows PC from your phone (viewer). Wraps the desktop renderer with Capacitor.",
+  "license": "AGPL-3.0-only",
+  "scripts": {
+    "www": "node build-www.mjs",
+    "sync": "node build-www.mjs && cap sync android",
+    "apk:debug": "node build-www.mjs && cap sync android && cd android && .\\gradlew.bat assembleDebug",
+    "apk:release": "node build-www.mjs && cap sync android && cd android && .\\gradlew.bat assembleRelease"
+  },
+  "dependencies": {
+    "@capacitor/android": "8.5.3",
+    "@capacitor/app": "8.1.2",
+    "@capacitor/core": "8.5.3"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.3"
+  }
+}

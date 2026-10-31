@@ -1,0 +1,203 @@
+/* TryDesk for Android — phone layout layered over the desktop style.css (same tokens, same components).
+   Everything is scoped to html.td-mobile, which mobile.js sets. */
+
+/* System-bar insets. The page is drawn edge-to-edge (viewport-fit=cover): on WebView 140+ Capacitor passes the
+   real insets through, so the status bar sits ON TOP of the page unless we leave room for it. Older WebViews get
+   a padded view and report 0 here. --safe-area-inset-* is Capacitor's injected copy, for WebViews whose env()
+   is unreliable. */
+html.td-mobile {
+  --sat: max(env(safe-area-inset-top, 0px), var(--safe-area-inset-top, 0px));
+  --sab: max(env(safe-area-inset-bottom, 0px), var(--safe-area-inset-bottom, 0px));
+  --sal: max(env(safe-area-inset-left, 0px), var(--safe-area-inset-left, 0px));
+  --sar: max(env(safe-area-inset-right, 0px), var(--safe-area-inset-right, 0px));
+}
+html.td-mobile, html.td-mobile body { height: 100%; }
+html.td-mobile body { height: 100dvh; padding-left: var(--sal); padding-right: var(--sar);
+  -webkit-tap-highlight-color: transparent; overscroll-behavior: none; touch-action: manipulation; }
+html.td-mobile .m-hide { display: none !important; }
+
+/* ─── Title bar: no window controls on a phone; starts below the status bar ─── */
+/* Top bar: the website's brand mark (white monitor in a red rounded square) + wordmark on the left; the connection
+   state as a short label and the settings button on the right. It replaces the desktop-style status bar at the
+   bottom, which a phone doesn't need. */
+html.td-mobile .titlebar { height: calc(56px + var(--sat)); padding-top: var(--sat); padding-right: 8px; background: var(--bg-primary); }
+html.td-mobile .titlebar-drag { padding-left: 16px; }
+html.td-mobile .titlebar-logo { font-size: 17px; font-weight: 700; letter-spacing: -0.2px; gap: 10px; }
+html.td-mobile .titlebar-logo svg { box-sizing: content-box; width: 18px; height: 18px; padding: 7px; border-radius: 9px; background: var(--accent); color: #fff; }
+html.td-mobile .titlebar-buttons { align-items: center; gap: 4px; }
+html.td-mobile .m-status { display: inline-flex; align-items: center; gap: 7px; height: 32px; padding: 0 11px; border: 1px solid var(--border); border-radius: 16px; background: var(--bg-secondary); color: var(--text-secondary); font: 600 12.5px/1 inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+html.td-mobile .m-status .status-dot { width: 7px; height: 7px; }
+html.td-mobile .status-bar { display: none; }
+html.td-mobile #btn-minimize, html.td-mobile #btn-maximize, html.td-mobile #btn-close { display: none; }
+html.td-mobile #btn-settings { display: none; }   /* Pengaturan lives in the bottom tab bar */
+html.td-mobile .m-status { margin-right: 8px; }
+
+/* ─── Bottom tab bar: a floating capsule (iOS-style) ─── */
+/* One solid surface with a hairline and a soft shadow (no blur stack); the active tab gets a filled pill in the
+   brand tint. Sits above the home screen and the settings sheet, clear of the gesture bar (safe-area inset). */
+.m-tabbar { display: none; }
+html.td-mobile .m-tabbar { position: fixed; left: 50%; bottom: calc(12px + var(--sab)); transform: translateX(-50%); z-index: 120; display: flex; gap: 4px; padding: 6px; width: min(360px, calc(100vw - 32px)); background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 26px; box-shadow: 0 10px 30px rgba(0,0,0,0.35), 0 1px 0 rgba(255,255,255,0.03) inset; }
+html.td-mobile[data-theme="light"] .m-tabbar { box-shadow: 0 10px 30px rgba(20,25,40,0.14); }
+html.td-mobile .m-tabbar.hidden { display: none; }
+html.td-mobile .m-tab { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; height: 52px; border: none; border-radius: 20px; background: transparent; color: var(--text-muted); font: 600 11px/1 inherit; cursor: pointer; -webkit-tap-highlight-color: transparent; transition: color 0.15s, background 0.15s; }
+html.td-mobile .m-tab svg { width: 22px; height: 22px; }
+html.td-mobile .m-tab.active { color: var(--accent); background: var(--accent-soft); }
+html.td-mobile .m-tab:active { transform: scale(0.97); }
+/* Home shows one card per tab; everything scrolls clear of the bar. */
+html.td-mobile[data-mtab="connect"] .hcard-sessions { display: none; }
+html.td-mobile[data-mtab="devices"] .home-top { display: none; }
+html.td-mobile .home { padding-bottom: calc(96px + var(--sab)); }
+
+/* ─── Home: one column, connect first ─── */
+/* The phone is a viewer: no "Desktop Ini" card. The connect card leads (its own heading replaces the card head),
+   the sessions card follows with full-width tabs and search. */
+html.td-mobile .home { padding: 16px 14px; gap: 14px; }
+html.td-mobile .home-top { grid-template-columns: 1fr; gap: 14px; }
+html.td-mobile .panel-left { display: none; }
+html.td-mobile .hcard-remote > .hcard-head { display: none; }
+html.td-mobile .hcard-body { padding: 18px 16px 18px; }
+html.td-mobile #btn-connect-files { display: none; }
+html.td-mobile .link-btn { font-size: 13.5px; padding: 8px 0; }
+html.td-mobile .sess-head { padding: 10px 12px; }
+html.td-mobile .sess-tabs { flex: 1; }
+html.td-mobile .sess-tab { flex: 1; justify-content: center; height: 38px; font-size: 14px; }
+html.td-mobile .recent-head-actions { width: 100%; margin-left: 0; flex-wrap: wrap; justify-content: space-between; row-gap: 8px; }
+html.td-mobile .sess-search { flex: 1 1 100%; }
+html.td-mobile .sess-search input { width: 100%; height: 38px; font-size: 16px; }
+html.td-mobile .view-toggle { display: none; }
+html.td-mobile .recent-sort, html.td-mobile .recent-clear { height: 38px; }
+html.td-mobile .hcard-sessions .recent-section { padding: 12px; }
+html.td-mobile .help-panel { width: 100%; max-width: none; max-height: none; height: 100%; border: 0; border-radius: 0; padding-top: var(--sat); }
+html.td-mobile #overlay-lan-help { align-items: stretch; background: var(--bg-primary); backdrop-filter: none; padding: 0; }
+html.td-mobile .help-body li, html.td-mobile .help-body p { font-size: 14.5px; }
+html.td-mobile .m-lead { font-size: 21px; font-weight: 700; line-height: 1.3; color: var(--text-primary); letter-spacing: -0.2px; margin-bottom: 18px; }
+html.td-mobile .connect-section label { display: block; }
+html.td-mobile .input-field { font-size: 16px; padding: 14px 15px; border-radius: 12px; }   /* 16px stops the WebView zooming on focus */
+html.td-mobile .pw-field > .input-field { padding-right: 52px; }
+html.td-mobile .pw-eye { width: 50px; border-radius: 0 12px 12px 0; }   /* a thumb-sized target */
+html.td-mobile .input-id { font-size: 24px; padding: 16px; letter-spacing: 3px; }
+html.td-mobile .btn-connect { padding: 16px; border-radius: 13px; font-size: 16px; }
+html.td-mobile .btn-connect:hover { transform: none; box-shadow: none; }
+html.td-mobile .m-foot { font-size: 12.5px; line-height: 1.5; color: var(--text-muted); margin-top: 6px; }
+html.td-mobile .m-ver { margin-top: 2px; font-variant-numeric: tabular-nums; }
+html.td-mobile .recent-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+html.td-mobile .recent-head { flex-wrap: wrap; row-gap: 8px; }
+html.td-mobile .fav-star.tile-star { opacity: 1; width: 32px; height: 32px; }
+html.td-mobile .tile-more { width: 36px; height: 36px; color: var(--text-secondary); }
+html.td-mobile .recent-tile { -webkit-touch-callout: none; user-select: none; }
+html.td-mobile .recent-tile:hover { transform: none; box-shadow: none; border-color: var(--border); background: var(--bg-secondary); }
+/* Tile menu = bottom sheet */
+html.td-mobile .tile-menu { left: 0; right: 0; margin: 0 auto; width: min(440px, calc(100vw - 20px)); max-width: none; top: auto;
+  bottom: calc(12px + var(--sab)); border-radius: 16px; padding: 8px; transform-origin: bottom center; animation: m-sheet 0.18s var(--ease);
+  box-shadow: 0 18px 60px rgba(0,0,0,0.6); }
+html.td-mobile .tile-menu .cc-item { padding: 13px 14px; font-size: 15px; }
+html.td-mobile .tile-menu-head { padding: 8px 14px 10px; font-size: 12.5px; }
+
+
+/* ─── Settings: full-screen sheet ─── */
+html.td-mobile #overlay-settings { align-items: stretch; justify-content: stretch; background: var(--bg-primary); backdrop-filter: none;
+  padding: var(--sat) var(--sar) 0 var(--sal); }
+html.td-mobile .settings-panel { width: 100%; max-width: none; max-height: none; height: 100%; border: 0; border-radius: 0; box-shadow: none; animation: none; }
+html.td-mobile .settings-header { padding-top: 14px; padding-bottom: 14px; }
+html.td-mobile .settings-body { padding: 0 18px calc(100px + var(--sab)); }   /* clear of the floating tab bar */
+html.td-mobile .settings-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -18px 18px; padding: 12px 18px; }
+html.td-mobile .settings-tabs::-webkit-scrollbar { display: none; }
+html.td-mobile .stab { flex: 1 0 auto; padding: 10px 6px; font-size: 13.5px; }   /* the five tabs fit one row, in English too */
+@media (max-width: 380px) { html.td-mobile .settings-tabs { padding: 12px 12px; } html.td-mobile .stab { padding: 10px 3px; font-size: 12.5px; } }
+html.td-mobile .select-input { font-size: 15px; padding-top: 12px; padding-bottom: 12px; }
+html.td-mobile .setting-row-toggle { gap: 14px; }
+
+/* ─── Connecting ─── */
+html.td-mobile .connecting-container { padding: 28px 22px; text-align: center; }
+html.td-mobile .btn-cancel { padding: 13px 30px; font-size: 15px; }
+
+/* ─── Remote: the picture takes the whole screen; controls float on top ─── */
+html.td-mobile .remote-tabs { display: none; }
+/* The session bar stays in the DOM (the Control Center lives inside it) but takes no space. */
+html.td-mobile .session-bar { height: 0; min-height: 0; padding: 0; border: 0; box-shadow: none; overflow: visible; background: none; }
+html.td-mobile .session-bar .sb-left, html.td-mobile .session-bar .sb-btn, html.td-mobile .session-bar .sb-divider,
+html.td-mobile .session-bar .sb-wincontrols, html.td-mobile .session-bar .cc-btn { display: none; }
+html.td-mobile #remote-canvas-container { touch-action: none; }
+/* Keep the picture out from under the status bar and the gesture bar (landscape on WebView 140+): a tap there
+   belongs to Android, so the PC's top-right window buttons and its taskbar could not be reached. */
+html.td-mobile #remote-canvas-container { top: var(--sat); bottom: var(--sab); }
+html.td-mobile .remote-canvas-container.fit .video-wrap { will-change: transform; }
+html.td-mobile .stats-overlay { top: calc(10px + var(--sat)); bottom: auto; left: 10px; min-width: 150px; padding: 8px 11px; font-size: 10.5px; }
+html.td-mobile #game-banner { display: none !important; }
+
+/* Click point in touchpad mode */
+#m-cursor { position: absolute; left: 0; top: 0; width: 20px; height: 20px; margin: -10px 0 0 -10px; border-radius: 50%;
+  border: 2px solid #fff; background: rgba(228, 49, 43, 0.28); box-shadow: 0 0 0 1px rgba(0,0,0,0.55), 0 2px 8px rgba(0,0,0,0.45);
+  pointer-events: none; z-index: 14; display: none; }
+
+/* Game mode: two hold-able mouse buttons on the right edge, above the toolbar — a thumb's reach in landscape. */
+#m-gamepad { position: absolute; right: calc(16px + var(--sar)); bottom: calc(84px + var(--sab)); z-index: 30; display: flex; gap: 12px; }
+#m-gamepad.hidden { display: none; }
+.m-gbtn { width: 64px; height: 64px; border-radius: 50%; border: 1px solid rgba(255,255,255,0.18); background: rgba(20,21,24,0.62);
+  color: #f2f2f4; font: 700 18px/1 inherit; touch-action: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+.m-gbtn.on { background: rgba(228, 49, 43, 0.85); border-color: transparent; }
+
+/* Floating toolbar */
+#m-toolbar { position: fixed; left: 50%; bottom: calc(12px + var(--sab)); transform: translateX(-50%);
+  display: flex; align-items: center; gap: 2px; padding: 5px; z-index: 45;
+  background: rgba(20, 21, 24, 0.86); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.45); }
+.m-tb { width: 44px; height: 42px; border: 0; border-radius: 11px; background: transparent; color: #d9dade;
+  display: flex; align-items: center; justify-content: center; cursor: pointer; transition: background 0.12s, color 0.12s; }
+.m-tb:active { background: rgba(255,255,255,0.10); }
+.m-tb.on { background: rgba(228, 49, 43, 0.16); color: #ff6b63; }
+#m-btn-close { color: #ff5a52; }
+#m-btn-hide { width: 34px; color: #8e9097; }
+.m-lat { display: flex; align-items: center; gap: 6px; padding: 0 8px; font-size: 11.5px; font-weight: 500; color: #a3a5ab; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.m-lat::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #5f6068; }
+.m-lat.lat-good::before { background: #22c55e; }
+.m-lat.lat-ok::before { background: #f59e0b; }
+.m-lat.lat-bad::before { background: #ef4444; }
+/* Portrait: the landscape bar (425 px) is wider than the phone and was cut off at both ends (user report). Tighter
+   buttons and a shorter latency chip keep it centred with a margin, down to 340 px wide. */
+@media (orientation: portrait) and (max-width: 600px) {
+  #m-toolbar { gap: 0; padding: 4px; max-width: calc(100vw - 16px); }
+  .m-tb { width: 38px; }
+  #m-btn-hide { width: 28px; }
+  .m-lat { padding: 0 5px; gap: 4px; font-size: 11px; }
+}
+@media (orientation: portrait) and (max-width: 359px) { .m-tb { width: 35px; } }
+#m-peek { position: fixed; left: 50%; bottom: calc(8px + var(--sab)); transform: translateX(-50%); z-index: 45;
+  width: 52px; height: 26px; border: 1px solid rgba(255,255,255,0.10); border-radius: 13px; background: rgba(20,21,24,0.72);
+  color: #c9cbd0; display: flex; align-items: center; justify-content: center; }
+
+/* Special-keys bar */
+#m-keys { position: fixed; left: 8px; right: 8px; bottom: calc(68px + var(--sab)); z-index: 45;
+  display: flex; gap: 6px; padding: 6px; overflow-x: auto; scrollbar-width: none;
+  background: rgba(20, 21, 24, 0.90); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,0.08); border-radius: 13px; }
+#m-keys::-webkit-scrollbar { display: none; }
+.m-key { flex: none; min-width: 46px; height: 38px; padding: 0 11px; border: 1px solid rgba(255,255,255,0.09); border-radius: 9px;
+  background: rgba(255,255,255,0.05); color: #e8e8ea; font: 600 13px/1 'Inter', sans-serif; }
+.m-key:active { background: rgba(255,255,255,0.14); }
+.m-key.m-mod { color: #c7c9ce; }
+.m-key.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+/* Hidden input that raises the phone keyboard */
+#m-kbd { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; resize: none; font-size: 16px; z-index: -1; }
+
+/* Control Center, sub-menus and the key-combo menu become bottom sheets above the toolbar */
+html.td-mobile .control-center, html.td-mobile .cc-flyout, html.td-mobile .key-menu {
+  left: 0 !important; right: 0; margin: 0 auto; width: min(440px, calc(100vw - 20px)); top: auto !important; bottom: calc(70px + var(--sab));
+  min-width: 0; max-width: none; max-height: 62dvh; overflow-y: auto; border-radius: 16px; padding: 8px;
+  transform-origin: bottom center; animation: m-sheet 0.18s var(--ease); }
+html.td-mobile .cc-flyout { z-index: 62; }
+@keyframes m-sheet { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+html.td-mobile .cc-cat, html.td-mobile .cc-leaf, html.td-mobile .key-menu button { padding: 13px 14px; font-size: 14.5px; }
+html.td-mobile .cc-leaf.m-back { color: var(--text-secondary); font-weight: 600; border-bottom: 1px solid var(--border); border-radius: 8px 8px 0 0; margin-bottom: 4px; }
+html.td-mobile .cc-flyout-slider { padding: 12px 14px; }
+html.td-mobile .cc-flyout-slider input[type="range"] { height: 28px; }
+
+/* Panels opened from the Control Center */
+html.td-mobile .quality-panel { width: 100%; border-left: 0; z-index: 50; }
+html.td-mobile .chat-panel { width: 100%; border-right: 0; padding: var(--sat) var(--sar) 0 var(--sal); }
+html.td-mobile .chat-input-row { padding-bottom: calc(12px + var(--sab)); }
+
+/* Toasts sit above the toolbar */
+html.td-mobile .toast { bottom: calc(80px + var(--sab)); max-width: calc(100vw - 28px); text-align: center; line-height: 1.45; }
+html.td-mobile:has(.m-tabbar:not(.hidden)) .toast { bottom: calc(92px + var(--sab)); }   /* above the floating tab bar */

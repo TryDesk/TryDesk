@@ -8,8 +8,9 @@ not through a middle server.
 
 Website: [trydesk.ai.id](https://trydesk.ai.id)
 
-> **Status:** the Windows build is ready to use. macOS, Linux, iOS and Android
-> are planned.
+> **Status:** early, actively developed by one person. Windows can control and be controlled; Linux (AppImage/deb)
+> and Android can control a Windows PC but can't be controlled yet. macOS and iOS are not started. Builds are not
+> code-signed yet, so Windows SmartScreen warns on first run; every download's SHA-256 is published on the site.
 
 ---
 
@@ -48,15 +49,27 @@ If you're new to programming, the friendliest place to read code first is
 - **Full keyboard** — forwards system shortcuts (Alt+Tab, Win) to the remote PC
 - **Multi-monitor** — switch between the host's displays mid-session
 - **Multi-remote tabs** — control several machines at once, each in its own tab
-- **High frame rate** — up to **240 FPS** capture via `getDisplayMedia` (144/165/180/240 for high-refresh displays); the actual rate depends on the host/viewer hardware and on-screen content
+- **High frame rate** — up to **240 FPS** capture via `getDisplayMedia`; above 120 FPS needs a host monitor that refreshes that fast, and the actual rate depends on the host/viewer hardware and on-screen content
 - **Real-time quality control** — bitrate / FPS / resolution + codec (AV1, VP9, VP8, H.264)
 - **Two-pane file manager** — browse local & remote folders, transfer both ways
 - **Chat** — in-session messaging with in-app and native notifications
 - **Clipboard sync & audio** — shared clipboard and remote audio
 - **Privacy** — blank the host screen and lock its input during a session
-- **Access control** — per-device IDs (regenerate anytime for security) with an optional connection password
-- **Discord Rich Presence** — shows "Using TryDesk" on your Discord profile (silent if Discord isn't running)
-- **Dark & light themes**, Indonesian / English UI
+- **Access control** — per-device IDs (regenerate anytime for security), an optional connection password
+  (wrong answers are throttled per requester; no password still gets the normal Accept prompt), and host-side
+  permissions for control / files / clipboard — view-only also blocks file and clipboard access
+- **Session recording** — streamed straight to a .webm file on disk (no RAM build-up on long sessions)
+- **Settings that act** — start with Windows, upload bandwidth cap, session time limit, lock Windows after a
+  session, keep the display awake while hosting, P2P-only / relay-only, default quality / codec / scale
+- **Discord Rich Presence** — shows "Using TryDesk" on your Discord profile (silent if Discord isn't running; can be turned off)
+- **Dark & light themes**, full Indonesian / English UI (follows the Windows language until you pick one)
+- **Android app (viewer)** — control a Windows PC from your phone: touchpad or direct touch, two-finger
+  scroll / right click, pinch zoom, the phone keyboard (autocorrect + emoji) and a special-keys bar. The phone
+  controls PCs but can't be controlled itself. ~3 MB APK, Android 7.0+
+- **Connect by IP on a LAN** — two devices on one network connect with no internet and no server: off by default,
+  local addresses only, and only with an access password of at least 10 characters (see SECURITY.md)
+- **Update notice** — the app reads `https://trydesk.ai.id/version.json`: a newer release shows a dismissable notice;
+  a version below the published safe minimum refuses connections until it is updated
 
 ---
 
@@ -64,7 +77,8 @@ If you're new to programming, the friendliest place to read code first is
 
 | Piece | Path | Tech |
 |-------|------|------|
-| Desktop app | `src/` | Electron (main / preload / renderer), `koffi` FFI → `user32.dll` for mouse/keyboard input |
+| Desktop app | `src/` | Electron 45 (main / preload / renderer), `koffi` FFI → `user32.dll` for mouse/keyboard input |
+| Android app | `mobile/` | Capacitor 8 wrapping the **same** renderer (`src/renderer`) + a phone layer (touch, keyboard, toolbar) |
 | Signaling server | `server/` | Node.js + `ws` WebSocket; relays the handshake, hands out IDs |
 | TURN / HTTPS | `deploy/` | Docker Compose: coturn (relay) + Caddy (automatic TLS) + the signaling server |
 
@@ -86,6 +100,11 @@ src/                     The desktop app (Electron)
     index.html               Markup for every screen
     app.js                   All UI logic + WebRTC (the biggest file; start here)
     style.css                Styling + light/dark theme tokens
+mobile/                  The Android app (viewer) — see mobile/README.md
+  build-www.mjs            Assembles the phone bundle from src/renderer + mobile/web
+  web/                     Phone layer: electronAPI shim, touch/keyboard/toolbar, phone CSS
+  android/                 Capacitor's Android project (Gradle); native plugins TdScreenPlugin (full screen)
+                           and TdLanPlugin (connect by IP)
 server/
   signaling-server.js      The "introducer" server
   Dockerfile               How to containerize it
@@ -93,7 +112,9 @@ deploy/                    One-command self-hosting (Docker Compose, Caddy, cotu
   .env.example             Copy to .env and fill in your domain + TURN secret
   setup.sh                 First-time VPS setup helper
 assets/                    App icon, logo & UI fonts
-.github/workflows/         CI: builds the Windows app (and signs it once signing is set up)
+scripts/                   Release + build helpers: buat-rilis.ps1 (one-command release), build-linux.sh (WSL),
+                           after-pack.js, diagnose.ps1
+docs/                      CARA-PAKAI.md: the full setup guide (Bahasa Indonesia)
 ```
 
 ---
@@ -101,17 +122,19 @@ assets/                    App icon, logo & UI fonts
 ## Getting started (run it from source)
 
 **1. Install the tools** (one-time):
-- [Node.js](https://nodejs.org/) version 18 or newer (this also installs `npm`).
-- [Git](https://git-scm.com/) to clone the project.
+- [Node.js](https://nodejs.org/) version 22.12 or newer (this also installs `npm`).
 - Building the **desktop app** requires **Windows** (it uses Windows input APIs).
 
-**2. Get the code and its dependencies:**
+**2. Get the code and its dependencies:** clone the repo from GitHub, or download the source zip from
+<https://trydesk.ai.id/source/> (every version is listed there with its SHA-256) and unzip it. Then:
 
 ```bash
-git clone https://github.com/YOUR-USERNAME/trydesk.git
-cd trydesk
+git clone https://github.com/TryDesk/TryDesk.git
+cd TryDesk
 npm install          # downloads the libraries listed in package.json
 ```
+
+You can also read every file online at <https://github.com/TryDesk/TryDesk> or <https://trydesk.ai.id/source/code/>.
 
 **3. Run it in development:**
 
@@ -130,7 +153,18 @@ npm run build:portable   # portable .exe only
 npm run build:installer  # NSIS installer only
 ```
 
-The finished files appear in the `dist/` folder.
+The finished files appear in the `dist/` folder. Each build also writes its size + SHA-256; users can check a
+download with `Get-FileHash .\TryDesk-Portable-<version>.exe` (PowerShell).
+
+### Build the Android app (APK)
+
+Needs JDK 21 and the Android SDK (platform 36). Details in [`mobile/README.md`](mobile/README.md).
+
+```bash
+cd mobile
+npm install
+npm run apk:debug        # -> mobile/android/app/build/outputs/apk/debug/app-debug.apk
+```
 
 ### Self-host the signaling server
 
@@ -150,10 +184,10 @@ setup on a fresh Ubuntu server.
 
 ## Troubleshooting
 
-- **`npm install` fails** — make sure Node.js 18+ is installed: run `node -v`.
+- **`npm install` fails** — make sure Node.js 22.12+ is installed: run `node -v`.
 - **App won't start / blank window** — some GPUs need software rendering; launch
   with `--no-gpu`. Startup problems are logged to
-  `%APPDATA%\TryDesk\trydesk-crash.log` (see `diagnose.ps1`).
+  `%APPDATA%\TryDesk\trydesk-crash.log` (see `scripts/diagnose.ps1`).
 - **Windows Sandbox / Hyper-V VM shuts down when a session starts** — GPU-accelerated
   screen capture through a virtual GPU (GPU-PV) can terminate the whole VM. TryDesk
   detects Windows Sandbox and Hyper-V guests and runs in software mode there
@@ -172,7 +206,8 @@ setup on a fresh Ubuntu server.
 
 ## Contributing
 
-Issues and pull requests are welcome — including from first-time contributors.
+Issues and pull requests on [GitHub](https://github.com/TryDesk/TryDesk) are welcome — including from first-time
+contributors. No GitHub account? Email support@trydesk.ai.id instead.
 Please keep the UI consistent with the existing design and test your changes in
 the app before submitting. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for a
 beginner-friendly walkthrough, and [`SECURITY.md`](SECURITY.md) to report a
@@ -180,6 +215,17 @@ vulnerability privately.
 
 ## License
 
-Released under the MIT License — free to use, modify, and share. See
-[`LICENSE`](LICENSE).
+Copyright © 2026 DrWeabo. TryDesk is free software under the
+**GNU Affero General Public License v3.0** ([`LICENSE`](LICENSE), see also
+[`NOTICE`](NOTICE)): you may use, study, modify and share it for free. If you
+distribute a modified version — or let people use it over a network — you must
+publish its source code under the same licence and keep the copyright notices and
+the "Made by DrWeabo" credit.
+
+TryDesk 1.1.1 and earlier were released under the MIT License; 1.2.0 and later
+are AGPL-3.0-only.
+
+The **TryDesk name and logo are trademarks** and are not covered by the licence:
+modified versions must use their own name. See [`TRADEMARK.md`](TRADEMARK.md).
+Official downloads: [trydesk.ai.id](https://trydesk.ai.id).
 </content>

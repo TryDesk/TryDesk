@@ -2,7 +2,7 @@
 <html lang="id">
 <head>
   <meta charset="UTF-8">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' wss://desk.trydesk.ai.id; base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; worker-src 'self'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self'; connect-src 'self' wss://desk.trydesk.ai.id https://trydesk.ai.id; base-uri 'none'; form-action 'none'; object-src 'none'; frame-src 'none'; worker-src 'self'">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TryDesk</title>
   <link rel="stylesheet" href="style.css">
@@ -26,6 +26,62 @@
       <button class="tb-btn" id="btn-minimize"><svg width="12" height="12" viewBox="0 0 12 12"><line x1="2" y1="6" x2="10" y2="6" stroke="currentColor" stroke-width="1.5"/></svg></button>
       <button class="tb-btn" id="btn-maximize"><svg width="12" height="12" viewBox="0 0 12 12"><rect x="2.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1.3"/></svg></button>
       <button class="tb-btn tb-close" id="btn-close"><svg width="12" height="12" viewBox="0 0 12 12"><line x1="2.5" y1="2.5" x2="9.5" y2="9.5" stroke="currentColor" stroke-width="1.5"/><line x1="9.5" y1="2.5" x2="2.5" y2="9.5" stroke="currentColor" stroke-width="1.5"/></svg></button>
+    </div>
+  </div>
+
+  <!-- Connect by IP (LAN): how-to + what to check when it fails. Opened from the home screen and Settings → Koneksi. -->
+  <div class="overlay hidden" id="overlay-lan-help">
+    <div class="settings-panel help-panel" role="dialog" aria-labelledby="lan-help-title">
+      <div class="settings-header">
+        <h3 id="lan-help-title">Sambung lewat IP (LAN)</h3>
+        <button class="settings-close" id="btn-lan-help-close" title="Tutup"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
+      </div>
+      <div class="settings-body help-body">
+        <div class="help-id">
+        <p>Untuk perangkat di jaringan yang sama (kantor, warnet, rumah). Tidak butuh internet dan tidak lewat server TryDesk.</p>
+        <h4>Di PC yang mau dikontrol (Windows)</h4>
+        <ol>
+          <li>Buka <b>Pengaturan → Koneksi</b>, nyalakan <b>Izinkan koneksi langsung dari jaringan lokal</b>. Saat Windows menanyakan izin firewall, centang <b>Jaringan pribadi (Private)</b> lalu klik <b>Izinkan</b>.</li>
+          <li>Pasang <b>password akses minimal 10 karakter</b> di <b>Pengaturan → Keamanan</b>. Tanpa itu, koneksi lewat IP selalu ditolak.</li>
+          <li>Catat alamat IP-nya. Alamat ini tampil di kartu <b>Desktop Ini</b> (mis. <code>192.168.1.20</code>).</li>
+        </ol>
+        <h4>Di PC atau HP yang mengontrol</h4>
+        <ol>
+          <li>Ketik alamat IP tadi di kolom <b>ID Remote</b>, isi password-nya, lalu klik <b>Hubungkan</b>.</li>
+        </ol>
+        <h4>Kalau gagal tersambung</h4>
+        <ul>
+          <li><b>"PC tujuan tidak menerima koneksi LAN"</b>: sakelarnya belum menyala, atau firewall memblokir. Di PC tujuan buka <b>Keamanan Windows → Firewall → Izinkan aplikasi</b>, centang TryDesk untuk <b>Private</b>, dan pastikan jaringan Wi-Fi/kabelnya diset sebagai <b>jaringan pribadi</b>.</li>
+          <li><b>"Tidak ada TryDesk yang menjawab"</b>: kedua perangkat tidak satu jaringan, atau Wi-Fi tamu/hotspot memisahkan perangkat. Pakai jaringan yang sama atau kabel LAN.</li>
+          <li><b>Alamat IP berubah</b> setelah router dinyalakan ulang. Cek lagi di kartu <b>Desktop Ini</b> pada PC tujuan.</li>
+          <li>Koneksi ini memakai port <b>TCP 7171</b>. Firewall pihak ketiga (antivirus) juga harus mengizinkannya.</li>
+        </ul>
+        </div>
+        <div class="help-en" lang="en">
+        <p>For devices on the same network (an office, an internet cafe, at home). No internet needed, and nothing goes through a TryDesk server.</p>
+        <h4>On the PC you want to control (Windows)</h4>
+        <ol>
+          <li>Open <b>Settings → Connection</b> and turn on <b>Allow direct connections from the local network</b>. When Windows asks about the firewall, tick <b>Private networks</b> and click <b>Allow</b>.</li>
+          <li>Set an <b>access password of at least 10 characters</b> in <b>Settings → Security</b>. Without it, connecting by IP is always refused.</li>
+          <li>Note its IP address. It shows on the <b>This Desktop</b> card (e.g. <code>192.168.1.20</code>).</li>
+        </ol>
+        <h4>On the controlling PC or phone</h4>
+        <ol>
+          <li>Type that IP address in the <b>Remote ID</b> box, enter the password and click <b>Connect</b>.</li>
+        </ol>
+        <h4>If it doesn't connect</h4>
+        <ul>
+          <li><b>"The other PC doesn't accept LAN connections"</b>: the switch is off, or a firewall blocks it. On that PC open <b>Windows Security → Firewall → Allow an app</b>, tick TryDesk for <b>Private</b>, and make sure its Wi-Fi/cable network is set to <b>Private</b>.</li>
+          <li><b>"No TryDesk answered at this address"</b>: the devices are not on the same network, or a guest Wi-Fi/hotspot keeps devices apart. Use the same network or a LAN cable.</li>
+          <li><b>The IP address changed</b> after the router restarted. Check it again on the <b>This Desktop</b> card of that PC.</li>
+          <li>This connection uses <b>TCP port 7171</b>. A third-party firewall (antivirus) must allow it too.</li>
+        </ul>
+        </div>
+        <div class="help-actions">
+          <button class="btn-secondary" id="btn-lan-help-settings">Buka pengaturan LAN</button>
+          <button class="btn-connect" id="btn-lan-help-ok"><span>Mengerti</span></button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -76,11 +132,12 @@
             </div>
           </div>
           <div class="setting-group">
-            <label>Pembaruan otomatis</label>
+            <label>Discord</label>
             <div class="setting-row-toggle">
-              <span>Periksa pembaruan saat aplikasi dimulai</span>
-              <label class="switch"><input type="checkbox" id="setting-auto-update" checked><span class="switch-slider"></span></label>
+              <span>Tampilkan status TryDesk di profil Discord</span>
+              <label class="switch"><input type="checkbox" id="setting-discord" checked><span class="switch-slider"></span></label>
             </div>
+            <div class="setting-note">Teman Discord Anda melihat "Menggunakan TryDesk" serta apakah Anda sedang mengontrol atau dikontrol.</div>
           </div>
         </div>
 
@@ -102,7 +159,17 @@
               <span>Terima koneksi otomatis jika ada password</span>
               <label class="switch"><input type="checkbox" id="setting-autoaccept" checked><span class="switch-slider"></span></label>
             </div>
-            <div class="setting-note">Jika password akses diset, koneksi dengan password benar langsung diterima tanpa konfirmasi.</div>
+            <div class="setting-note">Jika password akses diset (tab Keamanan), koneksi dengan password benar langsung diterima tanpa konfirmasi. Matikan bila Anda tetap ingin menekan Terima walau password benar.</div>
+          </div>
+          <div class="setting-group">
+            <label>Koneksi lewat IP (LAN)</label>
+            <div class="setting-row-toggle">
+              <span>Izinkan koneksi langsung dari jaringan lokal</span>
+              <label class="switch"><input type="checkbox" id="setting-lan"><span class="switch-slider"></span></label>
+            </div>
+            <div class="setting-note">PC lain di jaringan yang sama bisa tersambung dengan mengetik alamat IP PC ini, tanpa internet. Wajib memakai password akses minimal 10 karakter (tab Keamanan). Saat pertama dinyalakan, Windows akan meminta izin firewall.</div>
+            <div class="setting-note hidden" id="setting-lan-addr"></div>
+            <button class="link-btn" id="btn-lan-help-2">Cara pakai dan kalau gagal tersambung</button>
           </div>
           <div class="setting-group">
             <label>Mulai saat startup</label>
@@ -112,19 +179,12 @@
             </div>
           </div>
           <div class="setting-group">
-            <label>Minimalisasi ke tray</label>
+            <label>Saat jendela ditutup</label>
             <div class="setting-row-toggle">
-              <span>Sembunyikan ke system tray saat ditutup</span>
-              <label class="switch"><input type="checkbox" id="setting-tray"><span class="switch-slider"></span></label>
+              <span>Tetap berjalan di system tray (PC tetap bisa dihubungi)</span>
+              <label class="switch"><input type="checkbox" id="setting-close-to-tray" checked><span class="switch-slider"></span></label>
             </div>
-          </div>
-          <div class="setting-group">
-            <label>Koneksi langsung</label>
-            <div class="setting-row-toggle">
-              <span>Prioritaskan koneksi P2P langsung</span>
-              <label class="switch"><input type="checkbox" id="setting-prefer-p2p" checked><span class="switch-slider"></span></label>
-            </div>
-            <div class="setting-note">Jika gagal, otomatis fallback ke relay TURN server.</div>
+            <div class="setting-note">Tombol X menyembunyikan TryDesk ke system tray, seperti AnyDesk. Keluar sepenuhnya lewat klik kanan ikon TryDesk di tray → Keluar. Bila dimatikan, X menutup TryDesk.</div>
           </div>
           <div class="setting-group">
             <label>Auto-reconnect</label>
@@ -154,14 +214,10 @@
               <option value="p2p">P2P saja (tidak menggunakan relay)</option>
               <option value="relay">Relay saja (selalu gunakan TURN)</option>
             </select>
-            <div class="setting-note">Otomatis akan mencoba koneksi P2P terlebih dahulu, lalu fallback ke TURN relay.</div>
+            <div class="setting-note">Otomatis akan mencoba koneksi P2P terlebih dahulu, lalu fallback ke TURN relay. "Relay saja" hanya berfungsi bila server menyediakan TURN.</div>
           </div>
           <div class="setting-group">
-            <label>Pengaturan keepalive</label>
-            <div class="setting-row-toggle">
-              <span>Kirim sinyal keepalive agar koneksi tidak terputus</span>
-              <label class="switch"><input type="checkbox" id="setting-keepalive" checked><span class="switch-slider"></span></label>
-            </div>
+            <label>Saat menjadi host</label>
             <div class="setting-row-toggle">
               <span>Cegah layar mati pada host saat sesi aktif</span>
               <label class="switch"><input type="checkbox" id="setting-prevent-sleep"><span class="switch-slider"></span></label>
@@ -173,16 +229,18 @@
         <div class="settings-tab-content hidden" id="tab-security">
           <div class="setting-group" id="admin-group" style="display:none">
             <label>Kontrol penuh (administrator)</label>
-            <div class="setting-note">Jendela admin &amp; dialog UAC hanya bisa dikontrol dari jarak jauh bila TryDesk dijalankan sebagai administrator. Tanpa ini layar tetap terlihat, tapi klik &amp; ketik tidak berfungsi di jendela admin.</div>
+            <div class="setting-note">Jendela admin (mis. CMD sebagai administrator) hanya bisa dikontrol dari jarak jauh bila TryDesk dijalankan sebagai administrator. Tanpa ini layar tetap terlihat, tapi klik &amp; ketik tidak berfungsi di jendela admin. Dialog UAC tampil di desktop aman Windows dan tidak bisa dilihat atau dikontrol dari jarak jauh.</div>
             <button class="btn-apply" id="btn-run-admin" style="margin-top:10px">Jalankan sebagai administrator</button>
           </div>
           <div class="setting-group">
             <label>Password akses tanpa konfirmasi</label>
             <div class="password-row">
               <input type="password" id="access-password" placeholder="Kosong = selalu minta Accept" class="input-field" autocomplete="new-password">
-              <button class="toggle-pass-btn" id="btn-toggle-pass"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+              <button class="toggle-pass-btn" id="btn-toggle-pass" title="Tampilkan / sembunyikan"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg></button>
+              <button class="toggle-pass-btn hidden" id="btn-clear-pass" title="Hapus password akses"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4a1 1 0 011-1h4a1 1 0 011 1v2"/></svg></button>
             </div>
-            <div class="setting-note">Jika diset, remote yang memasukkan password ini bisa langsung terhubung tanpa klik Accept.</div>
+            <div class="setting-note pw-state" id="access-pw-state"></div>
+            <div class="setting-note">Jika diset, orang yang mengontrol PC ini cukup mengetik password ini di kolom Password pada TryDesk mereka (atau saat diminta) — mereka langsung masuk tanpa Anda klik Terima. Tanpa password, Anda tetap diminta Terima.</div>
           </div>
           <div class="setting-group">
             <label>Izin akses</label>
@@ -209,18 +267,6 @@
               <span>Kunci layar Windows setelah sesi berakhir</span>
               <label class="switch"><input type="checkbox" id="setting-lock-after-session"><span class="switch-slider"></span></label>
             </div>
-            <div class="setting-row-toggle">
-              <span>Catat log semua sesi koneksi</span>
-              <label class="switch"><input type="checkbox" id="setting-session-log" checked><span class="switch-slider"></span></label>
-            </div>
-          </div>
-          <div class="setting-group">
-            <label>IP Whitelist</label>
-            <div class="server-input-row">
-              <input type="text" id="setting-ip-whitelist" class="input-field" placeholder="Mis: 192.168.1.0/24, 10.0.0.5" maxlength="200">
-              <button class="btn-apply" id="btn-save-whitelist">Simpan</button>
-            </div>
-            <div class="setting-note">Hanya izinkan koneksi dari IP tertentu. Kosongkan untuk mengizinkan semua IP.</div>
           </div>
           <div class="setting-group">
             <label>Batas waktu sesi</label>
@@ -236,11 +282,7 @@
           <div class="setting-group">
             <label>Proteksi tambahan</label>
             <div class="setting-row-toggle">
-              <span>Konfirmasi ulang untuk fitur sensitif (file, clipboard)</span>
-              <label class="switch"><input type="checkbox" id="setting-confirm-sensitive"><span class="switch-slider"></span></label>
-            </div>
-            <div class="setting-row-toggle">
-              <span>Blokir koneksi setelah 3x password salah (5 menit)</span>
+              <span>Blokir peminta setelah 3x password salah (5–20 menit)</span>
               <label class="switch"><input type="checkbox" id="setting-brute-force" checked><span class="switch-slider"></span></label>
             </div>
           </div>
@@ -251,13 +293,16 @@
           <div class="setting-group">
             <label>Kualitas bawaan</label>
             <select id="setting-default-quality" class="select-input">
+              <option value="default" selected>Bawaan (80 Mbps / 60 FPS)</option>
               <option value="hemat">Hemat (3 Mbps / 15 FPS)</option>
-              <option value="seimbang" selected>Seimbang (20 Mbps / 30 FPS)</option>
+              <option value="seimbang">Seimbang (20 Mbps / 30 FPS)</option>
               <option value="kualitas">Kualitas (60 Mbps / 60 FPS)</option>
               <option value="ultra">Ultra (150 Mbps / 120 FPS)</option>
               <option value="gaming">Gaming (300 Mbps / 165 FPS)</option>
               <option value="maksimal">Maksimal (500 Mbps / 240 FPS)</option>
+              <option value="custom" hidden>Kustom (diatur di panel Kualitas)</option>
             </select>
+            <div class="setting-note">Dipakai untuk tab remote baru. FPS di atas 120 butuh monitor host dengan refresh rate setinggi itu.</div>
           </div>
           <div class="setting-group">
             <label>Codec video bawaan</label>
@@ -281,18 +326,6 @@
             <div class="setting-row-toggle">
               <span>Otomatis tampilkan panel statistik</span>
               <label class="switch"><input type="checkbox" id="setting-autostats"><span class="switch-slider"></span></label>
-            </div>
-            <div class="setting-row-toggle">
-              <span>Tampilkan kursor remote</span>
-              <label class="switch"><input type="checkbox" id="setting-show-cursor" checked><span class="switch-slider"></span></label>
-            </div>
-            <div class="setting-row-toggle">
-              <span>Sembunyikan wallpaper host (hemat bandwidth)</span>
-              <label class="switch"><input type="checkbox" id="setting-hide-wallpaper"><span class="switch-slider"></span></label>
-            </div>
-            <div class="setting-row-toggle">
-              <span>Nonaktifkan efek visual host (Aero, animasi)</span>
-              <label class="switch"><input type="checkbox" id="setting-disable-effects"><span class="switch-slider"></span></label>
             </div>
           </div>
           <div class="setting-group">
@@ -319,28 +352,12 @@
           <div class="setting-group">
             <label>Volume audio remote</label>
             <div class="bitrate-row">
-              <input type="range" id="setting-audio-volume" min="0" max="100" value="80" class="slider">
+              <input type="range" id="setting-audio-volume" min="0" max="100" value="100" class="slider">
               <div class="bitrate-value">
-                <input type="number" id="setting-audio-volume-num" min="0" max="100" value="80" class="num-input">
+                <input type="number" id="setting-audio-volume-num" min="0" max="100" value="100" class="num-input">
                 <span>%</span>
               </div>
             </div>
-          </div>
-          <div class="setting-group">
-            <label>Mikrofon</label>
-            <div class="setting-row-toggle">
-              <span>Izinkan pengiriman mikrofon ke remote</span>
-              <label class="switch"><input type="checkbox" id="setting-mic-enable"><span class="switch-slider"></span></label>
-            </div>
-            <div class="setting-note">Fitur ini memerlukan izin mikrofon dari sistem operasi.</div>
-          </div>
-          <div class="setting-group">
-            <label>Kualitas audio</label>
-            <select id="setting-audio-quality" class="select-input">
-              <option value="low">Rendah (hemat bandwidth)</option>
-              <option value="medium" selected>Sedang</option>
-              <option value="high">Tinggi (lossless-like)</option>
-            </select>
           </div>
         </div>
 
@@ -352,38 +369,11 @@
               <span>Gunakan akselerasi hardware GPU</span>
               <label class="switch"><input type="checkbox" id="setting-hw-accel" checked><span class="switch-slider"></span></label>
             </div>
-            <div class="setting-note">Memanfaatkan GPU untuk decode video. Nonaktifkan jika terjadi masalah tampilan.</div>
-          </div>
-          <div class="setting-group">
-            <label>Buffer jaringan</label>
-            <select id="setting-net-buffer" class="select-input">
-              <option value="low">Rendah (latensi minimal, mungkin patah-patah)</option>
-              <option value="medium" selected>Sedang (seimbang)</option>
-              <option value="high">Tinggi (halus, latensi lebih tinggi)</option>
-            </select>
-            <div class="setting-note">Buffer rendah cocok untuk cloud gaming. Buffer tinggi cocok untuk koneksi tidak stabil.</div>
-          </div>
-          <div class="setting-group">
-            <label>Logging</label>
-            <select id="setting-log-level" class="select-input">
-              <option value="off">Nonaktif</option>
-              <option value="error" selected>Hanya error</option>
-              <option value="info">Informasi</option>
-              <option value="debug">Debug (detail penuh)</option>
-            </select>
+            <div class="setting-note">Memanfaatkan GPU untuk capture, encode &amp; decode video. Nonaktifkan jika terjadi masalah tampilan. Berlaku setelah TryDesk dibuka ulang.</div>
           </div>
           <div class="setting-group">
             <label>Data & pengaturan</label>
-            <div class="setting-actions-row">
-              <button class="btn-setting-action" id="btn-export-settings">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-                <span data-i18n-text>Ekspor pengaturan</span>
-              </button>
-              <button class="btn-setting-action" id="btn-import-settings">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-                <span data-i18n-text>Impor pengaturan</span>
-              </button>
-            </div>
+            <div class="setting-note">Mengembalikan semua pengaturan ke bawaan. ID, favorit, dan riwayat koneksi tetap disimpan.</div>
             <button class="btn-setting-danger" id="btn-reset-settings">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 102.13-9.36L1 10"/></svg>
               <span data-i18n-text>Reset semua pengaturan ke bawaan</span>
@@ -392,11 +382,15 @@
           <div class="setting-group">
             <label>Tentang</label>
             <div class="about-info">
-              <div class="about-row"><span>Versi</span><b>TryDesk v1.0.0</b></div>
+              <div class="about-row"><span>Versi</span><b id="about-version">TryDesk</b></div>
+              <div class="about-row"><span>Riwayat versi</span><a href="https://trydesk.ai.id/docs/#versi" class="about-link" data-external>Fitur per versi</a></div>
+              <div class="about-row"><span>Dibuat oleh</span><b>DrWeabo</b></div>
               <div class="about-row"><span>Runtime</span><b>Electron + WebRTC</b></div>
-              <div class="about-row"><span>Website</span><a href="https://trydesk.ai.id" class="about-link">trydesk.ai.id</a></div>
-              <div class="about-row"><span>Lisensi</span><b>Gratis (Freeware)</b></div>
+              <div class="about-row"><span>Website</span><a href="https://trydesk.ai.id" class="about-link" data-external>trydesk.ai.id</a></div>
+              <div class="about-row"><span>Kode sumber</span><a href="https://trydesk.ai.id/source/" class="about-link" data-external>trydesk.ai.id/source</a></div>
+              <div class="about-row"><span>Lisensi</span><b>AGPL-3.0 (open source, gratis)</b></div>
             </div>
+            <div class="setting-note">© 2026 DrWeabo. TryDesk adalah perangkat lunak bebas di bawah lisensi GNU AGPL-3.0 dan diberikan apa adanya, tanpa garansi. Nama dan logo TryDesk adalah merek DrWeabo; versi modifikasi harus memakai nama lain.</div>
           </div>
         </div>
       </div>
@@ -421,11 +415,20 @@
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
           <span>Dapat melihat layar Anda</span>
         </div>
-        <div class="accept-info-row">
+        <div class="accept-info-row" id="accept-perm-control">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>
           <span>Dapat mengontrol keyboard & mouse</span>
         </div>
+        <div class="accept-info-row" id="accept-perm-files">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+          <span>Dapat membuka &amp; mengirim file di PC ini</span>
+        </div>
+        <div class="accept-info-row" id="accept-perm-clipboard">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 012 2v14a2 2 0 01-2 2H6a2 2 0 01-2-2V6a2 2 0 012-2h2"/></svg>
+          <span>Berbagi clipboard (teks yang disalin)</span>
+        </div>
       </div>
+      <p class="accept-pw-hint hidden" id="accept-pw-hint"></p>
       <p class="accept-warning">Terima hanya jika Anda mengenal dan mempercayai pengirim.</p>
       <div class="accept-timer">
         <div class="accept-timer-bar" id="accept-timer-bar"></div>
@@ -445,63 +448,103 @@
 
   <!-- Home Screen -->
   <div class="screen" id="screen-home">
-    <div class="home-container">
-      <div class="panel panel-left">
-        <div class="panel-header">
-          <div class="status-dot" id="status-dot"></div>
-          <span data-i18n="ui_desktop_this">Desktop Ini</span>
-        </div>
-        <div class="id-section">
-          <label data-i18n="ui_your_id">ID Anda</label>
-          <div class="id-display">
-            <span class="id-text">Menghubungkan...</span>
-            <button class="copy-btn" id="btn-copy" title="Salin ID"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>
-            <button class="copy-btn" id="btn-regen-id" title="Buat ID baru" data-i18n-title="ui_regen_id_title"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg></button>
-          </div>
-          <div class="id-note" data-i18n="ui_id_note">Bagikan ID ini agar orang lain bisa terhubung ke desktop Anda</div>
-        </div>
+    <!-- Home: two cards (this device / remote control) over one card of saved sessions (tabs + search). -->
+    <div class="home">
+      <!-- Update notice (version.json on the website): dismissable for a normal release; red and permanent when this
+           version is below the safe minimum (then connections are refused until TryDesk is updated). -->
+      <div class="update-bar hidden" id="update-bar" role="status">
+        <svg class="update-ic" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <div class="update-copy"><b id="update-title"></b><span id="update-text"></span></div>
+        <button class="update-btn" id="update-download">Download</button>
+        <button class="icon-btn" id="update-dismiss" title="Tutup"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>
       </div>
-
-      <div class="panel panel-right">
-        <div class="panel-header">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-          <span data-i18n="ui_remote_desktop">Remote Desktop</span>
-        </div>
-        <div class="connect-section">
-          <label data-i18n="ui_remote_id">ID Remote</label>
-          <input type="text" id="remote-id" placeholder="Masukkan ID remote" data-i18n-ph="ph_remote_id" class="input-field input-id" maxlength="11" autocomplete="off">
-          <input type="password" id="remote-password" placeholder="Password (opsional)" data-i18n-ph="ph_password" class="input-field" autocomplete="off">
-          <button class="btn-connect" id="btn-connect">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
-            <span data-i18n="ui_connect">Hubungkan</span>
-          </button>
-        </div>
-        <div class="recent-section" id="favorites-section" style="display:none">
-          <label data-i18n="ui_favorites">Favorit</label>
-          <div class="recent-grid" id="favorites-list"></div>
-        </div>
-        <div class="recent-section" id="recent-section" style="display:none">
-          <div class="recent-head">
-            <label data-i18n="ui_recent">Koneksi Terakhir</label>
-            <div class="recent-head-actions">
-              <div class="view-toggle">
-                <button id="view-grid" class="view-btn active" title="Tampilan grid"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
-                <button id="view-list" class="view-btn" title="Tampilan daftar"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
+      <div class="home-top">
+        <section class="hcard hcard-device panel-left">
+          <div class="hcard-head">
+            <span class="status-dot" id="status-dot"></span>
+            <span data-i18n="ui_desktop_this">Desktop Ini</span>
+          </div>
+          <div class="hcard-body id-section">
+            <label data-i18n="ui_your_id">ID Anda</label>
+            <div class="id-row">
+              <span class="id-text">Menghubungkan...</span>
+              <button class="chip-btn" id="btn-copy" title="Salin ID"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg><span>Salin</span></button>
+              <button class="icon-btn" id="btn-regen-id" title="Buat ID baru" data-i18n-title="ui_regen_id_title"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M1 20v-6h6"/><path d="M3.51 9a9 9 0 0114.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0020.49 15"/></svg></button>
+            </div>
+            <div class="id-note" data-i18n="ui_id_note">Bagikan ID ini agar orang lain bisa terhubung ke desktop Anda</div>
+            <!-- What decides how others get in: the access password, and connecting by IP on the local network. -->
+            <div class="home-facts" id="home-facts">
+              <div class="fact">
+                <span class="fact-label">Password akses</span>
+                <span class="fact-value" id="fact-pw-val">Belum diatur</span>
+                <button class="fact-btn" id="fact-pw-btn">Atur</button>
               </div>
-              <select id="recent-sort" class="recent-sort" title="Urutkan">
-                <option value="recent" data-i18n="ui_sort_recent">Terbaru</option>
-                <option value="id" data-i18n="ui_sort_id">Nomor ID</option>
-              </select>
-              <button id="recent-clear" class="recent-clear" title="Hapus semua riwayat" data-i18n="ui_clear_all">Hapus semua</button>
+              <div class="fact">
+                <span class="fact-label">Sambung lewat IP</span>
+                <span class="fact-value" id="fact-lan-val">Nonaktif</span>
+                <button class="fact-btn" id="fact-lan-btn">Aktifkan</button>
+              </div>
             </div>
           </div>
-          <div class="recent-grid" id="recent-list"></div>
-        </div>
+        </section>
+
+        <section class="hcard hcard-remote panel-right">
+          <div class="hcard-head">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+            <span data-i18n="ui_remote_desktop">Remote Desktop</span>
+          </div>
+          <div class="hcard-body connect-section">
+            <label data-i18n="ui_remote_id">ID Remote</label>
+            <input type="text" id="remote-id" placeholder="Masukkan ID atau alamat IP" data-i18n-ph="ph_remote_id" class="input-field input-id" maxlength="64" autocomplete="off">
+            <input type="password" id="remote-password" placeholder="Password (opsional)" data-i18n-ph="ph_password" class="input-field" autocomplete="off">
+            <div class="connect-actions">
+              <button class="btn-connect" id="btn-connect">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5l7 7-7 7"/></svg>
+                <span data-i18n="ui_connect">Hubungkan</span>
+              </button>
+              <button class="btn-secondary" id="btn-connect-files" title="Hubungkan dan langsung buka Manajer file">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+                <span>Transfer file</span>
+              </button>
+            </div>
+            <button class="link-btn" id="btn-lan-help">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 015.83 1c0 2-3 3-3 3"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+              <span>Satu jaringan? Sambung lewat IP</span>
+            </button>
+          </div>
+        </section>
       </div>
+
+      <section class="hcard hcard-sessions">
+        <div class="sess-head recent-head">
+          <div class="sess-tabs" role="tablist">
+            <button class="sess-tab active" role="tab" data-sess="recent"><span data-i18n="ui_recent">Koneksi Terakhir</span><span class="sess-count" id="count-recent">0</span></button>
+            <button class="sess-tab" role="tab" data-sess="fav"><span data-i18n="ui_favorites">Favorit</span><span class="sess-count" id="count-fav">0</span></button>
+          </div>
+          <div class="recent-head-actions">
+            <label class="sess-search">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+              <input type="text" id="sess-search" placeholder="Cari ID atau nama" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="view-toggle">
+              <button id="view-grid" class="view-btn active" title="Tampilan grid"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg></button>
+              <button id="view-list" class="view-btn" title="Tampilan daftar"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>
+            </div>
+            <select id="recent-sort" class="recent-sort" title="Urutkan">
+              <option value="recent" data-i18n="ui_sort_recent">Terbaru</option>
+              <option value="id" data-i18n="ui_sort_id">Nomor ID</option>
+            </select>
+            <button id="recent-clear" class="recent-clear" title="Hapus semua riwayat" data-i18n="ui_clear_all">Hapus semua</button>
+          </div>
+        </div>
+        <div class="recent-section" id="recent-section"><div class="recent-grid" id="recent-list"></div></div>
+        <div class="recent-section hidden" id="favorites-section"><div class="recent-grid" id="favorites-list"></div></div>
+        <div class="sess-empty hidden" id="sess-empty"></div>
+      </section>
     </div>
     <div class="status-bar">
       <span id="status-text">Menghubungkan ke server...</span>
-      <span class="status-version">TryDesk v1.0.0</span>
+      <span class="status-version" id="status-version">TryDesk</span>
     </div>
   </div>
 
@@ -532,6 +575,20 @@
           <span>Membangun koneksi P2P</span>
         </div>
       </div>
+      <!-- Shown when the host has an access password and asks again (none typed, or a wrong one). The host's
+           Accept dialog is open at the same time: whichever comes first — the password or a click — wins. -->
+      <!-- While it is open the screen shows only this form (style.css hides the ring and the steps). -->
+      <form class="connect-pw hidden" id="connect-pw" autocomplete="off">
+        <h2 class="cpw-title">Password akses</h2>
+        <p class="cpw-peer" id="connect-pw-peer"></p>
+        <label class="cpw-label" for="connect-pw-input">Password</label>
+        <div class="connect-pw-row">
+          <input type="password" id="connect-pw-input" class="input-field" autocomplete="off">
+          <button type="submit" class="btn-pw" id="connect-pw-go">Masuk</button>
+        </div>
+        <p class="connect-pw-msg" id="connect-pw-msg" role="status"></p>
+        <p class="cpw-wait" id="connect-pw-wait"><span class="cpw-spin" aria-hidden="true"></span><span id="connect-pw-wait-text"></span></p>
+      </form>
       <button class="btn-cancel" id="btn-cancel-connect">Batalkan</button>
     </div>
   </div>
@@ -820,7 +877,7 @@
 
   <!-- Shortcut keys menu -->
   <div class="key-menu hidden" id="key-menu">
-    <button data-keys="17,18,46">Ctrl + Alt + Del</button>
+    <!-- No Ctrl+Alt+Del: Windows ignores an injected secure-attention sequence, so the entry could never work. -->
     <button data-keys="18,9">Alt + Tab</button>
     <button data-keys="91">Tombol Windows</button>
     <button data-keys="91,68">Win + D (Desktop)</button>
@@ -842,6 +899,12 @@
       <button class="btn-apply" id="btn-chat-send">Kirim</button>
     </div>
   </div>
+
+  <!-- Way back to sessions still running while Home / Connecting is shown ("＋", a tile double-click…) -->
+  <button class="back-pill hidden" id="back-to-session">
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>
+    <span>Kembali ke sesi</span>
+  </button>
 
   <script src="app.js"></script>
 </body>

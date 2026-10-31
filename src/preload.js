@@ -2,12 +2,23 @@ const { contextBridge, ipcRenderer } = require("electron");
 
 contextBridge.exposeInMainWorld("electronAPI", {
   getConfig: () => ipcRenderer.invoke("get-config"),
+  checkUpdate: () => ipcRenderer.invoke("check-update"),
   confirm: (opts) => ipcRenderer.invoke("confirm-dialog", opts),
   isElevated: () => ipcRenderer.invoke("is-elevated"),
   relaunchAsAdmin: () => ipcRenderer.invoke("relaunch-as-admin"),
-  getSources: () => ipcRenderer.invoke("get-sources"),
-  getScreenSize: () => ipcRenderer.invoke("get-screen-size"),
+  onElevatedRelaunchBlocked: (cb) => ipcRenderer.on("elevated-relaunch-blocked", () => cb()),
   getMonitors: () => ipcRenderer.invoke("get-monitors"),
+  // Settings that act on the OS
+  getLoginItem: () => ipcRenderer.invoke("get-login-item"),
+  setLoginItem: (on) => ipcRenderer.invoke("set-login-item", !!on),
+  setPowerSave: (on) => ipcRenderer.send("power-save", !!on),
+  lockWorkstation: () => ipcRenderer.send("lock-workstation"),
+  getHwAccel: () => ipcRenderer.invoke("get-hw-accel"),
+  setHwAccel: (on) => ipcRenderer.invoke("set-hw-accel", !!on),
+  openExternal: (url) => ipcRenderer.send("open-external", String(url || "")),
+  setDiscordEnabled: (on) => ipcRenderer.send("set-discord-enabled", !!on),
+  setHostingState: (on) => ipcRenderer.send("hosting-state", !!on),
+  onPrivacyReleased: (cb) => ipcRenderer.on("privacy-released", () => cb()),
   setDisplayMediaSource: (id, displayId) => ipcRenderer.invoke("set-dm-source", id, displayId),
   setCaptureDisplay: (d) => ipcRenderer.send("set-capture-display", d),
   executeInput: (event) => ipcRenderer.send("execute-input", event),
@@ -16,6 +27,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
   minimizeWindow: () => ipcRenderer.send("minimize-window"),
   maximizeWindow: () => ipcRenderer.send("maximize-window"),
   closeWindow: () => ipcRenderer.send("close-window"),
+  // System tray: hide the window (TryDesk keeps running), quit for real, and keep the tray's ID line current.
+  hideToTray: (firstTime) => ipcRenderer.send("hide-to-tray", !!firstTime),
+  quitApp: () => ipcRenderer.send("quit-app"),
+  setTrayInfo: (info) => ipcRenderer.send("tray-info", { id: String(info?.id || "") }),
+  onCloseRequested: (cb) => ipcRenderer.on("close-requested", () => cb()),
+  onQuitRequested: (cb) => ipcRenderer.on("quit-requested", () => cb()),
 
   clipboardRead: () => ipcRenderer.invoke("clipboard-read"),
   clipboardWrite: (text) => ipcRenderer.invoke("clipboard-write", text),
@@ -36,7 +53,19 @@ contextBridge.exposeInMainWorld("electronAPI", {
   onDisplayChanged: (cb) => ipcRenderer.on("display-changed", () => cb()),
   onHostCursorHidden: (cb) => ipcRenderer.on("host-cursor-hidden", (_e, hidden) => cb(hidden)),
   requestCursorState: () => ipcRenderer.send("request-cursor-state"),
+  // An admin window (Task Manager, admin CMD) in front of a non-elevated host: input to it is blocked by Windows.
+  onHostAdminWindow: (cb) => ipcRenderer.on("host-admin-window", (_e, on) => cb(!!on)),
+  requestAdminWindowState: () => ipcRenderer.send("request-admin-window-state"),
   logInfo: (msg) => ipcRenderer.send("log-info", String(msg)),
+
+  // LAN direct connection ("Sambung lewat IP"): main.js moves JSON lines over TCP, app.js speaks the protocol.
+  lanHost: (opts) => ipcRenderer.invoke("lan-host", { on: !!opts?.on, machine: String(opts?.machine || "") }),
+  lanOpen: (address) => ipcRenderer.invoke("lan-open", String(address || "")),
+  lanWrite: (id, msg) => ipcRenderer.send("lan-write", String(id), msg),
+  lanClose: (id) => ipcRenderer.send("lan-close", String(id)),
+  lanKeep: (id) => ipcRenderer.send("lan-keep", String(id)),
+  lanAddrs: () => ipcRenderer.invoke("lan-addrs"),
+  onLanEvent: (cb) => ipcRenderer.on("lan-event", (_e, ev) => cb(ev)),
 
   // Full keyboard capture: the renderer switches it on while actively controlling a remote PC.
   setKeyCapture: (on) => ipcRenderer.send("set-key-capture", !!on),
@@ -51,6 +80,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   // Discord Rich Presence: report session state so the user's profile shows what TryDesk is doing.
   setDiscordActivity: (state) => ipcRenderer.send("discord-activity", String(state || "idle")),
+  setUiLanguage: (lang) => ipcRenderer.send("set-ui-language", lang === "en" ? "en" : "id"),
 
   enableBlackScreen: () => ipcRenderer.invoke("enable-black-screen"),
   disableBlackScreen: () => ipcRenderer.invoke("disable-black-screen"),

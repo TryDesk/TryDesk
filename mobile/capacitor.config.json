@@ -1,0 +1,17 @@
+{
+  "appId": "id.ai.trydesk.android",
+  "appName": "TryDesk",
+  "webDir": "www",
+  "server": {
+    "androidScheme": "https",
+    "hostname": "app.trydesk.ai.id"
+  },
+  "android": {
+    "allowMixedContent": false,
+    "captureInput": false,
+    "adjustMarginsForEdgeToEdge": "force"
+  },
+  "plugins": {
+    "SystemBars": { "style": "DARK" }
+  }
+}

@@ -1,38 +1,69 @@
 {
   "name": "trydesk",
-  "version": "1.0.0",
-  "description": "TryDesk - Remote Desktop Software",
-  "author": "TryDesk",
+  "version": "1.2.9",
+  "description": "Free, open-source remote desktop (WebRTC P2P) for Windows",
+  "author": "DrWeabo (TryDesk)",
+  "license": "AGPL-3.0-only",
+  "homepage": "https://trydesk.ai.id",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TryDesk/TryDesk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/TryDesk/TryDesk/issues",
+    "email": "support@trydesk.ai.id"
+  },
   "main": "src/main.js",
+  "desktopName": "trydesk.desktop",
   "scripts": {
     "start": "electron .",
     "server": "node server/signaling-server.js",
     "dev": "concurrently \"npm run server\" \"electron .\"",
     "build": "electron-builder --win --x64",
     "build:portable": "electron-builder --win portable --x64",
-    "build:installer": "electron-builder --win nsis --x64"
+    "build:installer": "electron-builder --win nsis --x64",
+    "build:linux": "electron-builder --linux AppImage deb --x64 --publish never"
   },
   "dependencies": {
     "discord-rpc": "^4.0.1",
-    "electron-store": "^8.1.0",
-    "koffi": "^2.9.0",
-    "uuid": "^9.0.0",
-    "ws": "^8.16.0"
+    "koffi": "^2.9.0"
   },
   "devDependencies": {
     "concurrently": "^8.2.2",
-    "electron": "^28.1.0",
-    "electron-builder": "^24.9.1"
+    "electron": "^45.0.0",
+    "electron-builder": "^26.18.0",
+    "ws": "^8.22.0"
   },
   "build": {
     "appId": "com.trydesk.app",
     "productName": "TryDesk",
-    "copyright": "Copyright © 2026 TryDesk",
+    "copyright": "Copyright © 2026 DrWeabo",
+    "electronLanguages": [
+      "en-US",
+      "id"
+    ],
+    "compression": "maximum",
+    "afterPack": "scripts/after-pack.js",
     "files": [
       "src/**/*",
-      "server/**/*",
       "assets/**/*",
-      "node_modules/**/*"
+      "node_modules/**/*",
+      "!node_modules/koffi/build/koffi/{darwin_*,freebsd_*,linux_*,musl_*,openbsd_*,win32_arm64,win32_ia32}/**",
+      "!node_modules/koffi/{doc,src,vendor,lib}/**"
+    ],
+    "extraFiles": [
+      {
+        "from": "LICENSE",
+        "to": "LICENSE.TryDesk.txt"
+      },
+      {
+        "from": "NOTICE",
+        "to": "NOTICE.TryDesk.txt"
+      },
+      {
+        "from": "TRADEMARK.md",
+        "to": "TRADEMARK.TryDesk.md"
+      }
     ],
     "win": {
       "icon": "assets/icon.ico",
@@ -51,8 +82,54 @@
         }
       ]
     },
+    "linux": {
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.png",
+      "category": "Network",
+      "executableName": "trydesk",
+      "maintainer": "DrWeabo <support@trydesk.ai.id>",
+      "synopsis": "Free, open-source remote desktop (controls other PCs)",
+      "syncDesktopName": true,
+      "desktop": {
+        "entry": {
+          "Comment": "Free, open-source remote desktop: control your Windows PCs from Linux"
+        }
+      }
+    },
+    "appImage": {
+      "artifactName": "TryDesk-${version}-x86_64.AppImage"
+    },
+    "deb": {
+      "artifactName": "TryDesk-${version}-amd64.deb",
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libasound2 | libasound2t64"
+      ]
+    },
     "portable": {
-      "artifactName": "TryDesk-Portable.exe"
+      "artifactName": "TryDesk-Portable.exe",
+      "unpackDirName": true
     },
     "nsis": {
       "artifactName": "TryDesk-Setup-${version}.exe",
@@ -65,7 +142,8 @@
       "installerIcon": "assets/icon.ico",
       "uninstallerIcon": "assets/icon.ico",
       "installerHeaderIcon": "assets/icon.ico",
-      "deleteAppDataOnUninstall": false
+      "deleteAppDataOnUninstall": false,
+      "differentialPackage": false
     },
     "asar": true,
     "asarUnpack": [
