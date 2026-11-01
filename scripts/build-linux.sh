@@ -29,3 +29,5 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 cp dist/*.AppImage dist/*.deb "$OUT/"
 echo "-- Linux packages:"
 (cd "$OUT" && ls -la && sha256sum *)
+# The build copy is ~650 MB and npm ci reinstalls it anyway next time; Electron's download cache (~/.cache) stays.
+cd "$HOME" && rm -rf "$B"

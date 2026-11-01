@@ -45,7 +45,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   fileOpenWrite: (p) => ipcRenderer.invoke("file-open-write", p),
   fileOpenWriteIn: (dir, name) => ipcRenderer.invoke("file-open-write-in", { dir, name }),
   fileWriteChunk: (id, chunk) => ipcRenderer.invoke("file-write-chunk", { id, chunk }),
-  fileCloseWrite: (id, deleteFile, filePath) => ipcRenderer.invoke("file-close-write", { id, deleteFile, filePath }),
+  fileCloseWrite: (id, deleteFile) => ipcRenderer.invoke("file-close-write", { id, deleteFile }),
 
   fsHome: () => ipcRenderer.invoke("fs-home"),
   fsList: (p) => ipcRenderer.invoke("fs-list", p),
@@ -64,7 +64,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
   lanWrite: (id, msg) => ipcRenderer.send("lan-write", String(id), msg),
   lanClose: (id) => ipcRenderer.send("lan-close", String(id)),
   lanKeep: (id) => ipcRenderer.send("lan-keep", String(id)),
-  lanAddrs: () => ipcRenderer.invoke("lan-addrs"),
   onLanEvent: (cb) => ipcRenderer.on("lan-event", (_e, ev) => cb(ev)),
 
   // Full keyboard capture: the renderer switches it on while actively controlling a remote PC.

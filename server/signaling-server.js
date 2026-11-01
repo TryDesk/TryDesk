@@ -13,6 +13,25 @@ const OWNERS_CAP = 100000;   // bound the reserved-ID map so churn can't exhaust
 const MAX_MSG_PER_SEC = 100; // per-socket message flood cap (ICE can burst, so leave headroom)
 const MAX_CONNREQ_PER_10S = 5;
 const MAX_CONN_PER_IP = 30;
+// Oldest app version allowed to connect ("" = no check; self-hosted servers leave it unset). Apps from 1.2.8 also read
+// "minimum" from the website's version.json and stop themselves; this reaches the older ones, which never do: they get
+// told to update (a server "error" shows as a toast in every version) and their requests are refused.
+const MIN_CLIENT_VERSION = /^\d+\.\d+\.\d+$/.test(process.env.MIN_CLIENT_VERSION || "") ? process.env.MIN_CLIENT_VERSION : "";
+const UPDATE_URL_TEXT = "trydesk.ai.id/downloads";
+function verLess(a, b) {
+  const x = a.split(".").map(Number), y = b.split(".").map(Number);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);
+  return false;
+}
+// The version a client is running: what it reports at sign-in (1.2.0+), else "TryDesk/x.y.z" in the desktop app's
+// User-Agent. "" = can't tell (a very old phone app, a script): never blocked on a guess.
+function clientVersion(ws, msg) {
+  const said = msg.app && typeof msg.app === "object" && typeof msg.app.v === "string" ? msg.app.v : "";
+  if (/^\d+\.\d+\.\d+$/.test(said)) return said;
+  const m = String(ws.ua || "").match(/TryDesk\/(\d+\.\d+\.\d+)/i);
+  return m ? m[1] : "";
+}
+const tooOld = (ws) => !!(MIN_CLIENT_VERSION && ws && ws.ver && verLess(ws.ver, MIN_CLIENT_VERSION));
 
 const online = new Map();      // id -> ws
 const owners = new Map();      // id -> token (keeps an ID reserved for the device that owns it)
@@ -133,12 +152,43 @@ function rateOk(ws) {
   if (now - (ws.rlStart || 0) > 1000) { ws.rlStart = now; ws.rlCount = 0; }
   return (++ws.rlCount) <= MAX_MSG_PER_SEC;
 }
+// The per-socket budget alone was reset by simply reconnecting, so the same budgets are also kept per client IP
+// (an office behind one NAT gets four times a single socket's share) and per target: no PC gets more than
+// MAX_INCOMING_PER_MIN prompts a minute, however many IPs ask — a flood could otherwise keep it "busy" for everyone.
+// The per-target budget is counted per asking IP first, so one hostile sender can't use up a PC's whole budget and
+// lock everyone else out; the overall per-target cap only bites when many IPs pile on together.
+const MAX_CONNREQ_PER_IP_10S = 20;
+const MAX_INCOMING_PER_MIN = 30;
+const MAX_INCOMING_PER_IP_PER_MIN = 6;
+const ipReqTimes = new Map();      // ip -> [timestamps]
+const targetReqTimes = new Map();  // targetId -> [timestamps]
+const pairReqTimes = new Map();    // "targetId|ip" -> [timestamps]
+function withinBudget(map, key, windowMs, max, now) {
+  const times = (map.get(key) || []).filter((t) => now - t < windowMs);
+  if (times.length >= max) { map.set(key, times); return false; }
+  times.push(now);
+  map.set(key, times);
+  return true;
+}
 function connReqOk(ws) {
   const now = Date.now();
   ws.crTimes = (ws.crTimes || []).filter((t) => now - t < 10000);
   if (ws.crTimes.length >= MAX_CONNREQ_PER_10S) return false;
+  if (!withinBudget(ipReqTimes, ws.ip || "?", 10000, MAX_CONNREQ_PER_IP_10S, now)) return false;
   ws.crTimes.push(now);
   return true;
+}
+function incomingOk(target, ip) {
+  const now = Date.now();
+  return withinBudget(pairReqTimes, `${target}|${ip || "?"}`, 60000, MAX_INCOMING_PER_IP_PER_MIN, now)
+    && withinBudget(targetReqTimes, target, 60000, MAX_INCOMING_PER_MIN, now);
+}
+// Drop expired entries so the two maps stay small (called from the keep-alive sweep).
+function sweepReqBudgets() {
+  const now = Date.now();
+  for (const [map, windowMs] of [[ipReqTimes, 10000], [targetReqTimes, 60000], [pairReqTimes, 60000]]) {
+    for (const [k, times] of map) if (!times.some((t) => now - t < windowMs)) map.delete(k);
+  }
 }
 
 function register(ws, msg) {
@@ -180,6 +230,8 @@ function register(ws, msg) {
     }
   }
   send(ws, { type: "registered", clientId: id, token: finalToken, iceServers: turnServers(id) });
+  ws.ver = clientVersion(ws, msg);
+  if (tooOld(ws)) send(ws, { type: "error", targetId: "update", message: `TryDesk ${ws.ver} sudah terlalu lama dan tidak bisa terhubung lagi. Perbarui ke versi terbaru di ${UPDATE_URL_TEXT}` });
   console.log(`[+] ${id} (${online.size} online)`);
 }
 
@@ -195,6 +247,12 @@ function handle(ws, msg) {
     case "connect-request": {
       // Errors name the request's target so a client with several tabs closes the right one.
       const target = typeof msg.targetId === "string" ? msg.targetId.slice(0, 16) : "";
+      // Something that can never be an ID (the Android app's "td-probe" socket check) is answered at once and costs
+      // no budget: it reaches nobody, and counting it used to eat the phone's own connect budget.
+      if (!/^\d{3} \d{3} \d{3}$/.test(target)) {
+        send(ws, { type: "error", targetId: target, message: "ID tidak ditemukan atau sedang offline" });
+        return;
+      }
       if (!connReqOk(ws)) {
         note("ratelimit", { id: me, target });
         send(ws, { type: "error", targetId: target, message: "Terlalu banyak permintaan, coba lagi sebentar" });
@@ -202,6 +260,16 @@ function handle(ws, msg) {
       }
       if (target === me || !online.has(target)) {
         send(ws, { type: "error", targetId: target, message: "ID tidak ditemukan atau sedang offline" });
+        return;
+      }
+      if (tooOld(ws)) {
+        send(ws, { type: "error", targetId: target, message: `TryDesk ${ws.ver} sudah terlalu lama. Perbarui ke versi terbaru di ${UPDATE_URL_TEXT} agar bisa terhubung lagi` });
+        return;
+      }
+      if (tooOld(online.get(target))) {
+        send(ws, { type: "error", targetId: target, message: `PC tujuan memakai TryDesk versi lama. Minta pemiliknya memperbarui di ${UPDATE_URL_TEXT}` });
+        // The old PC is told too. targetId names the requester, a tab it has no session for, so nothing closes there.
+        sendTo(target, { type: "error", targetId: me, message: `Ada yang mencoba terhubung, tapi TryDesk di PC ini versi lama. Perbarui di ${UPDATE_URL_TEXT}` });
         return;
       }
       // Block controlling your own PC. A second TryDesk instance on the same device shares the
@@ -220,6 +288,12 @@ function handle(ws, msg) {
       // A host is single-session: busy while someone (still around) is controlling it.
       if (isHostingBusy(target)) {
         send(ws, { type: "error", targetId: target, message: "Remote desktop sedang dalam sesi lain" });
+        return;
+      }
+      // Counted only for a request that would really pop up on the target (not a self or busy refusal).
+      if (!incomingOk(target, ws.ip)) {
+        note("ratelimit", { id: me, target });
+        send(ws, { type: "error", targetId: target, message: "PC tujuan sedang menerima terlalu banyak permintaan, coba lagi sebentar" });
         return;
       }
       addPending(me, target);
@@ -317,8 +391,10 @@ function note(type, info) { if (ownerTools) ownerTools.onEvent(type, info); }
 
 // The public page only says the server is up: how many devices are online — let alone which — is nobody's business.
 const server = http.createServer((req, res) => {
-  const url = new URL(req.url || "/", "http://x");
   const noStore = { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store", "X-Robots-Tag": "noindex, nofollow", "Referrer-Policy": "no-referrer" };
+  // A path such as "//" makes new URL() throw, and a throw here used to end the whole process.
+  let url;
+  try { url = new URL(req.url || "/", "http://x"); } catch { res.writeHead(400, noStore); return res.end(); }
   if (ownerTools && ownerTools.handleHttp(req, res, url, noStore)) return;
   res.writeHead(200, noStore);
   res.end("TryDesk signaling server OK\n");
@@ -352,7 +428,12 @@ function clientIp(req) {
 }
 
 wss.on("connection", (ws, req) => {
+  // ws emits "error" for a frame over maxPayload or invalid UTF-8; with no listener Node treats it as uncaught and
+  // the whole server exits (every session dropped). Registered first, before anything below can return early.
+  ws.on("error", () => {});
   const ip = clientIp(req);
+  ws.ip = ip;
+  ws.ua = String(req.headers["user-agent"] || "").slice(0, 300);
   ipCounts.set(ip, (ipCounts.get(ip) || 0) + 1);
   if (ipCounts.get(ip) > MAX_CONN_PER_IP) {
     ipCounts.set(ip, ipCounts.get(ip) - 1);
@@ -403,6 +484,7 @@ wss.on("connection", (ws, req) => {
 
 // Keeps connections alive through proxies (Render/Cloudflare close idle sockets)
 setInterval(() => {
+  sweepReqBudgets();
   for (const ws of wss.clients) {
     if (!ws.isAlive) { ws.terminate(); continue; }
     ws.isAlive = false;
@@ -410,4 +492,8 @@ setInterval(() => {
   }
 }, 25000);
 
-server.listen(PORT, () => console.log(`TryDesk signaling server on port ${PORT}`));
+// Last line of defence: a bug that slips past the guards above is logged instead of taking every session down.
+process.on("uncaughtException", (e) => console.error("uncaught:", e && e.stack || e));
+
+server.listen(PORT, () => console.log(`TryDesk signaling server on port ${PORT}` +
+  (MIN_CLIENT_VERSION ? `, oldest app allowed ${MIN_CLIENT_VERSION}` : process.env.MIN_CLIENT_VERSION ? `, MIN_CLIENT_VERSION "${process.env.MIN_CLIENT_VERSION}" ignored (use x.y.z)` : "")));

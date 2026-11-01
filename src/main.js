@@ -367,7 +367,7 @@ function createWindow() {
     try { disableBlackScreen(); } catch {}
     try { disableInputLock(); } catch {}
     try { if (inputReady) inputSim.releaseAll(); } catch {}
-    try { _kbWantCapture = false; refreshKeyHook(); } catch {}
+    try { _kbWantCapture = false; refreshKeyHook(); setMacMenu(false); } catch {}
     try { _mouseWant = false; inputSim.stopMouseHook && inputSim.stopMouseHook(); } catch {}
     if (!_reloaded) { _reloaded = true; try { mainWindow.reload(); } catch {} }
   });
@@ -718,7 +718,6 @@ ipcMain.handle("lan-open", (_e, address) => new Promise((resolve) => {
 }));
 ipcMain.on("lan-write", (_e, id, msg) => { if (msg && typeof msg === "object") lanWrite(String(id), msg); });
 ipcMain.on("lan-close", (_e, id) => { const s = lanConns.get(String(id)); if (s) { try { s.end(); } catch {} setTimeout(() => { try { s.destroy(); } catch {} }, 1000); } });
-ipcMain.handle("lan-addrs", () => lanAddrs());
 // Elevation: report whether the host runs as admin (can control admin windows), and relaunch elevated.
 ipcMain.handle("is-elevated", () => { try { return inputSim.isElevated ? inputSim.isElevated() : false; } catch { return false; } });
 // Start-Process -Verb RunAs shows the UAC prompt. Quit ONLY once the elevated copy really started (exit code 0):

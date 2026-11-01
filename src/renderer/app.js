@@ -257,6 +257,8 @@ function applyLanguage(l) {
 const TEXT_EN = {
   // General
   "Alias perangkat": "Device alias", "Simpan": "Save",
+  "Tunggu transfer yang sedang berjalan selesai": "Wait for the current transfer to finish",
+  "Lokasi ini tidak bisa dibuka dari jarak jauh": "This location can't be opened remotely",
   "Nama ini akan ditampilkan saat meminta koneksi ke perangkat lain.": "This name is shown when requesting a connection to other devices.",
   "Bahasa antarmuka": "Interface language", "Notifikasi": "Notifications",
   "Tampilkan notifikasi koneksi masuk": "Show incoming connection notifications",
@@ -1332,8 +1334,8 @@ async function onSignal(msg) {
     case "connection-rejected": {
       const s = sessions.get(msg.fromId);
       if (!s) return;
-      // The reason comes from the other side through the server: only ever a short string.
-      const reason = (typeof msg.reason === "string" && msg.reason.slice(0, 160)) || "Koneksi ditolak";
+      // The reason comes from the other side, so only TryDesk's own texts are shown (see knownPeerText).
+      const reason = knownPeerText(msg.reason, "Koneksi ditolak");
       sessLog(s, "rejected: " + reason.slice(0, 80));
       closeSession(s, false); showToast(reason);
       reconnectFailed(s, reason);
@@ -1640,10 +1642,9 @@ const PW_GLOBAL_MAX = 12;                      // total wrong answers (any reque
 const PW_GLOBAL_WINDOW = 10 * 60 * 1000;
 // One budget per path: wrong answers over the LAN must not switch off password auto-accept for ID callers, and an
 // internet attacker who knows the ID must not lock the owner out of LAN connections.
-let pwGlobalFail = { id: { count: 0, until: 0, first: 0 }, lan: { count: 0, until: 0, first: 0 } };
+const pwGlobalFail = { id: { times: [], until: 0 }, lan: { times: [], until: 0 } };
 const pwPath = (id) => (lanIn(id) ? "lan" : "id");
 const pwGlobalBlocked = (id) => bruteForceGuard && pwGlobalFail[pwPath(id)].until > Date.now();
-function pwGlobalReset() { pwGlobalFail = { id: { count: 0, until: 0, first: 0 }, lan: { count: 0, until: 0, first: 0 } }; }
 function pwFailed(id) {
   if (!bruteForceGuard) return;
   id = pwKey(id);
@@ -1653,17 +1654,18 @@ function pwFailed(id) {
   if (f.count >= 3) f.until = Date.now() + Math.min(20, 5 * (f.count - 2)) * 60 * 1000;
   pwFail.set(id, f);
   if (pwFail.size > 500) pwFail.delete(pwFail.keys().next().value);
-  // Global tally (rolling window): withhold the challenge for 10 min once too many wrong answers pile up.
+  // Global tally (rolling window): withhold the challenge for 10 min once too many wrong answers pile up in any
+  // 10 minutes. A fixed window let a burst straddle the reset and get nearly twice the budget.
   const now = Date.now();
   const g = pwGlobalFail[pwPath(id)];
-  if (now - g.first > PW_GLOBAL_WINDOW) { g.count = 0; g.until = 0; g.first = now; }
-  g.count++;
-  if (g.count >= PW_GLOBAL_MAX) g.until = now + PW_GLOBAL_WINDOW;
+  g.times = g.times.filter((t) => now - t < PW_GLOBAL_WINDOW);
+  g.times.push(now);
+  if (g.times.length >= PW_GLOBAL_MAX) g.until = now + PW_GLOBAL_WINDOW;
 }
 
 async function handleIncoming(msg) {
   if (updateRequired) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: "PC tujuan memakai versi TryDesk lama yang wajib diperbarui" }); return; }
-  // The Linux build can control other PCs but can't be controlled yet (screen capture + input are Windows code).
+  // The macOS and Linux builds can control other PCs but can't be controlled (screen capture + input are Windows code).
   if (viewerOnlyDesktop()) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: isMacViewer() ? "Perangkat ini memakai TryDesk untuk macOS, yang hanya bisa mengontrol PC Windows" : "PC ini memakai TryDesk untuk Linux, yang saat ini hanya bisa mengontrol PC lain" }); return; }
   // An accept dialog or password challenge is already in flight for another requester — reject this
   // one instead of stacking (which would corrupt state and double-start a session).
@@ -1960,6 +1962,8 @@ async function handleFsRequest(sess, ev) {
   let res;
   try {
     const target = ev.home ? await window.electronAPI.fsHome() : ev.path;
+    // Empty = the "This PC" root (drives); anything else must be a plain drive path, never \\server or a pipe.
+    if (target && !peerPathOk(target)) throw new Error("Lokasi ini tidak bisa dibuka dari jarak jauh");
     res = await window.electronAPI.fsList(target);
   } catch (e) {
     res = { ok: false, error: String(e && e.message || e), path: ev.path, display: ev.path || "" };
@@ -2329,12 +2333,20 @@ function sendBye(sess, reason = "") {
   } catch {}
   return false;
 }
+// Reasons (rejection, end of session) are typed by the OTHER PC and shown as TryDesk's own toast, so a hostile
+// peer could write "TryDesk: akun diblokir, hubungi WA ...". Every reason TryDesk sends is a fixed text that also
+// sits in TEXT_EN (it gets translated), so that list is the allow-list; anything else shows the plain fallback.
+// One reason carries a number (the LAN password length), so it is matched by its exact shape instead.
+const KNOWN_PEER_REASON = /^PC tujuan perlu password akses minimal \d{1,2} karakter untuk koneksi lewat IP$/;
+function knownPeerText(reason, fallback) {
+  const r = typeof reason === "string" ? reason.trim() : "";
+  return r && (Object.prototype.hasOwnProperty.call(TEXT_EN, r) || KNOWN_PEER_REASON.test(r)) ? r : fallback;
+}
 function onBye(sess, reason) {
   sess.byeReceived = true;
-  const r = typeof reason === "string" ? reason.slice(0, 120) : "";
   if (sess.role === "viewer") stopReconnect(sess.peerId);
   closeSession(sess, false);
-  showToast(r || "Remote desktop memutus koneksi");
+  showToast(knownPeerText(reason, "Remote desktop memutus koneksi"));
 }
 
 // Settings → Keamanan → lock Windows after a session. A deliberate end locks right away; an unexpected drop
@@ -2498,6 +2510,7 @@ function openNewConnection() {
 // Switch which viewer tab is shown; restore all shared UI from that session.
 function switchTab(sess) {
   if (!sess || sess.role !== "viewer") return;
+  if (sess !== active) releaseHeldInput();
   active = sess;
   renderAdminBanner();
   scaleMode = sess.scaleMode;
@@ -2560,10 +2573,11 @@ function askAccept(fromId, fromName, hint = "") {
     $("#accept-id").textContent = fromId;
     setAcceptHint(hint);
     const aliasEl = $("#accept-alias");
-    aliasEl.textContent = fromName && fromName !== "TryDesk User" ? fromName : "";
+    const alias = stripBidi(fromName).trim();   // the requester picks this text: no right-to-left tricks
+    aliasEl.textContent = alias && alias !== "TryDesk User" ? alias : "";
     // Settings → Umum → Notifikasi: tell the user even when TryDesk is behind other windows.
     if (!document.hasFocus() && prefGet("notifyIncoming")) {
-      try { new Notification(tr("Permintaan koneksi masuk"), { body: (fromName && fromName !== "TryDesk User" ? fromName + " · " : "") + fmtId(fromId), silent: !prefGet("notifySound") }); } catch {}
+      try { new Notification(tr("Permintaan koneksi masuk"), { body: (alias && alias !== "TryDesk User" ? alias + " · " : "") + fmtId(fromId), silent: !prefGet("notifySound") }); } catch {}
     } else if (prefGet("notifySound")) chime();
     // List only what this remote will REALLY be able to do, from the host's current permissions.
     $("#accept-perm-control").classList.toggle("hidden", !hostControlAllowed());
@@ -2844,8 +2858,17 @@ const hostControlAllowed = () => allowInput && !forceViewOnly;
 const hostFilesAllowed = () => allowFileTransfer && hostControlAllowed();
 // A file name sent by the peer becomes a bare base name — never a path that pre-points the save dialog or the
 // file manager at another folder (e.g. "..\..\Startup\update.exe").
+// Right-to-left override and the other bidi controls let "invoice<RLO>fdp.exe" show up as "invoiceexe.pdf".
+const BIDI_CTRL = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
+const stripBidi = (s) => String(s || "").replace(BIDI_CTRL, "");
+// A path the PEER asks the host to list/read/write must be a plain drive path ("C:\..."). "\\server\share",
+// "\\?\", "\\.\pipe\..." were refused nowhere: a pipe blocks the read forever (the whole host app freezes,
+// panic key included) and a UNC path makes Windows send this user's NTLM hash to whatever server the peer names.
+// A device name anywhere in the path (C:\COM1, C:\x\CONIN$) opens a device instead of a file and can block the same way.
+const peerPathOk = (p) => typeof p === "string" && /^[A-Za-z]:[\\/]/.test(p) && !p.includes("\0")
+  && !p.slice(3).split(/[\\/]/).some((seg) => /^(con|prn|aux|nul|com\d|lpt\d|conin\$|conout\$)(\.|$)/i.test(seg));
 const safeFileName = (n) => {
-  let s = String(n || "").split(/[\\/]/).pop().replace(/[:*?"<>|\x00-\x1f]/g, "_").replace(/^\.+$/, "").replace(/[ .]+$/, "").slice(0, 200);
+  let s = stripBidi(n).split(/[\\/]/).pop().replace(/[:*?"<>|\x00-\x1f]/g, "_").replace(/^\.+$/, "").replace(/[ .]+$/, "").slice(0, 200);
   // Windows reserved device names (CON, NUL, COM1…) would make the write hang or misbehave — prefix them.
   if (/^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(s)) s = "_" + s;
   return s || "file";
@@ -3198,7 +3221,7 @@ async function onFileControl(sess, ev) {
   else if (ev.t === "m-put") {
     // Peer wants to upload ev.name into our ev.destDir. Only the host serves the file manager,
     // and only when file transfer is permitted — never expose a machine we connected OUT to.
-    if (sess.role !== "host" || !hostFilesAllowed() || !(Number.isSafeInteger(ev.size) && ev.size >= 0)) { ch.send(JSON.stringify({ t: "m-putok", id: ev.id, ok: false, err: "ditolak" })); return; }
+    if (sess.role !== "host" || !hostFilesAllowed() || !(Number.isSafeInteger(ev.size) && ev.size >= 0) || !peerPathOk(ev.destDir)) { ch.send(JSON.stringify({ t: "m-putok", id: ev.id, ok: false, err: "ditolak" })); return; }
     if (fileBusy(sess)) { ch.send(JSON.stringify({ t: "m-putok", id: ev.id, ok: false, err: "busy" })); return; }
     try {
       const { id: writeId, path: filePath } = await window.electronAPI.fileOpenWriteIn(ev.destDir, safeFileName(ev.name));
@@ -3224,7 +3247,7 @@ async function onFileControl(sess, ev) {
     if (sess.activeSend && sess.activeSend.id === ev.id && sess.activeSend.onDone) sess.activeSend.onDone(ev);
   } else if (ev.t === "m-get") {
     // Peer wants to download ev.remotePath from us. Host-only + permission-gated (see m-put).
-    if (sess.role !== "host" || !hostFilesAllowed()) { ch.send(JSON.stringify({ t: "m-got", id: ev.id, ok: false, err: "ditolak" })); return; }
+    if (sess.role !== "host" || !hostFilesAllowed() || !peerPathOk(ev.remotePath)) { ch.send(JSON.stringify({ t: "m-got", id: ev.id, ok: false, err: "ditolak" })); return; }
     if (fileBusy(sess)) { ch.send(JSON.stringify({ t: "m-got", id: ev.id, ok: false, err: "busy" })); return; }
     try {
       const readId = await window.electronAPI.fileOpenRead(ev.remotePath);
@@ -3302,7 +3325,7 @@ const writtenAll = (rec) => (rec && rec.chain ? rec.chain : Promise.resolve());
 function discardRecv(rec) {
   if (!rec || rec.closed) return Promise.resolve();
   rec.closed = true;
-  return writtenAll(rec).then(() => window.electronAPI.fileCloseWrite(rec.writeId, true, rec.filePath)).catch(() => {});
+  return writtenAll(rec).then(() => window.electronAPI.fileCloseWrite(rec.writeId, true)).catch(() => {});
 }
 
 function cleanupTransfers(sess) {
@@ -3941,6 +3964,9 @@ function normalizedPoint(e) {
 }
 const BUTTONS = ["left", "middle", "right"];
 const remoteButtonsDown = new Set();   // buttons pressed on the remote screen and not yet released there
+// Releases every key/button still held on the active remote (set up with the input listeners). switchTab calls it
+// first: keyups go to the active tab, so a Ctrl held while switching tabs would otherwise stay down on the old PC.
+let releaseHeldInput = () => {};
 let panning = false, panStart = null;
 
 // ── Game mode: pointer-lock + relative mouse (for Minecraft/FPS and any pointer-capturing game) ──
@@ -4176,6 +4202,11 @@ function setupInputCapture() {
   }
   window.addEventListener("blur", releaseAllKeys);
   document.addEventListener("visibilitychange", () => { if (document.hidden) releaseAllKeys(); });
+  releaseHeldInput = () => {
+    releaseAllKeys();
+    for (const b of remoteButtonsDown) sendInput({ action: "mouseup", button: b });
+    remoteButtonsDown.clear();
+  };
 
   // Keys captured natively in the main process (system shortcuts like Alt+Tab/Win that the browser never
   // sees outside fullscreen) arrive here and are forwarded to the host exactly like local keys.
@@ -4981,10 +5012,11 @@ $("#update-dismiss").addEventListener("click", () => { if (updateInfo) store.set
   serverUrl = config.signalingServer;
   if (viewerOnlyDesktop()) {
     // Say what this build does instead of offering an ID nobody can connect to; hide Windows-only settings.
-    const note = $(".id-note"); if (note) { note.removeAttribute("data-i18n"); note.textContent = tr(isMacViewer() ? "TryDesk untuk macOS hanya bisa mengontrol PC Windows. Mac ini tidak bisa dikontrol dari jarak jauh." : "TryDesk untuk Linux saat ini hanya bisa mengontrol PC lain. PC ini belum bisa dikontrol dari jarak jauh."); }
+    // Plain Indonesian: the text observer translates it and keeps it as the source, so a later language switch works.
+    const note = $(".id-note"); if (note) { note.removeAttribute("data-i18n"); note.textContent = isMacViewer() ? "TryDesk untuk macOS hanya bisa mengontrol PC Windows. Mac ini tidak bisa dikontrol dari jarak jauh." : "TryDesk untuk Linux saat ini hanya bisa mengontrol PC lain. PC ini belum bisa dikontrol dari jarak jauh."; }
     $("#setting-startup")?.closest(".setting-group")?.style.setProperty("display", "none");
   }
-  // Only a PC that can be controlled listens for LAN requests; the Linux and phone builds still connect BY IP.
+  // Only a PC that can be controlled listens for LAN requests; the macOS, Linux and phone builds still connect BY IP.
   if (viewerOnlyDesktop() || window.TD_MOBILE) $("#setting-lan")?.closest(".setting-group")?.style.setProperty("display", "none");
   try { const saved = JSON.parse(store.get("quality")); if (saved) defaultQuality = { ...DEFAULT_QUALITY, ...saved }; } catch {}
   clipboardSync = store.get("clipboardSync") !== "0";

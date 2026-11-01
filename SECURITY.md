@@ -25,13 +25,23 @@ deployment configuration (`deploy/`).
 
 The security model: screen, input, and file data flow **directly between peers**,
 encrypted with DTLS-SRTP. The signaling server only brokers the initial handshake
-and never sees session content. A TURN relay is used only when a direct P2P path
-is impossible. Reports that strengthen these guarantees are especially welcome.
+and, as long as it runs unmodified, never sees session content (see the known limit
+below). A TURN relay is used only when a direct P2P path is impossible. Reports that
+strengthen these guarantees are especially welcome.
 
 ## What protects a session (and what doesn't)
 
 - **Content:** screen, input, files, clipboard and chat travel peer to peer over WebRTC, encrypted with DTLS-SRTP.
   The signaling server and the TURN relay only see encrypted traffic.
+  - **Known limit (internet ID path):** the offer/answer that carries the DTLS fingerprints is relayed by the
+    signaling server and is not yet signed (on the LAN path it is). A server operator, or someone who has taken over
+    the server, could therefore swap the fingerprints and sit in the middle of a session. Signing the ID-path
+    offer/answer with the access-password key, plus a short code to compare on both screens for Accept-only
+    sessions, is planned together with the PAKE work.
+- **Stored secrets:** the access password is kept only as its PBKDF2 key, but that key is what answers a challenge,
+  so anyone who can read TryDesk's local data (malware running as the user, a copied profile) can use it like the
+  password. Keep the user profile safe and change the password if it may have leaked. Moving it to an augmented PAKE
+  (the host keeps only a verifier) is planned.
 - **Getting in:** a host either asks its owner to click Accept, or (if an access password is set) checks the password
   with a challenge/response. The host sends a salt and a one-time nonce; the requester answers with
   HMAC-SHA256(PBKDF2-SHA256(password, salt, 150 000 rounds), nonce). The password itself never leaves either device,

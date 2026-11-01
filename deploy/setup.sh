@@ -86,8 +86,12 @@ no-dtls
 no-cli
 no-multicast-peers
 no-tcp-relay
-total-quota=100
+total-quota=300
 user-quota=12
+# Bandwidth cap (bytes per second) for one relayed session: 50 Mbit/s, above what a remote desktop stream needs,
+# so free credentials cannot be turned into a bulk relay. No bps-capacity: coturn reserves max-bps for every
+# allocation out of it, so a total cap would limit the NUMBER of relayed sessions, not the traffic.
+max-bps=6250000
 stale-nonce=600
 # Never relay into private / local networks (protects the VPS's own network)
 denied-peer-ip=0.0.0.0-0.255.255.255

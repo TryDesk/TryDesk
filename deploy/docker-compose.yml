@@ -8,6 +8,7 @@ services:
       TURN_HOST: ${TURN_DOMAIN}
       TURN_PORT: ${TURN_PORT}
       OWNERS_FILE: /data/owners.json
+      MIN_CLIENT_VERSION: ${MIN_CLIENT_VERSION:-}
     volumes:
       - signaling_data:/data
     expose:

@@ -30,3 +30,5 @@ rm -rf "$OUT"; mkdir -p "$OUT"
 cp dist/*-mac-arm64.zip dist/*-mac-x64.zip "$OUT/"
 echo "-- macOS zips:"
 (cd "$OUT" && ls -la && sha256sum *)
+# The build copy is ~900 MB and npm ci reinstalls it anyway next time; Electron's download cache (~/.cache) stays.
+cd "$HOME" && rm -rf "$B"
