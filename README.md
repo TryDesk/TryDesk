@@ -8,9 +8,10 @@ not through a middle server.
 
 Website: [trydesk.ai.id](https://trydesk.ai.id)
 
-> **Status:** early, actively developed by one person. Windows can control and be controlled; Linux (AppImage/deb)
-> and Android can control a Windows PC but can't be controlled yet. macOS and iOS are not started. Builds are not
-> code-signed yet, so Windows SmartScreen warns on first run; every download's SHA-256 is published on the site.
+> **Status:** early, actively developed by one person. Windows can control and be controlled; macOS (since 1.3.0),
+> Linux (AppImage/deb) and Android can control a Windows PC but can't be controlled. iOS is not started. Builds are
+> not code-signed yet: Windows SmartScreen warns on first run, and on a Mac you run `xattr -cr /Applications/TryDesk.app`
+> once; every download's SHA-256 is published on the site.
 
 ---
 
@@ -112,7 +113,7 @@ deploy/                    One-command self-hosting (Docker Compose, Caddy, cotu
   .env.example             Copy to .env and fill in your domain + TURN secret
   setup.sh                 First-time VPS setup helper
 assets/                    App icon, logo & UI fonts
-scripts/                   Release + build helpers: buat-rilis.ps1 (one-command release), build-linux.sh (WSL),
+scripts/                   Release + build helpers: buat-rilis.ps1 (one-command release), build-linux.sh (WSL), build-mac.sh (on a Mac),
                            after-pack.js, diagnose.ps1
 docs/                      CARA-PAKAI.md: the full setup guide (Bahasa Indonesia)
 ```
@@ -155,6 +156,17 @@ npm run build:installer  # NSIS installer only
 
 The finished files appear in the `dist/` folder. Each build also writes its size + SHA-256; users can check a
 download with `Get-FileHash .\TryDesk-Portable-<version>.exe` (PowerShell).
+
+### Build the macOS app
+
+```bash
+bash scripts/build-mac.sh                       # on a Mac: Apple Silicon + Intel .zip  ->  dist/
+bash scripts/build-mac-wsl.sh /mnt/c/path/to/project   # in WSL Ubuntu (no Mac)  ->  dist-mac/
+```
+
+On a Mac the zips get a full ad-hoc signature (no Apple account needed). From WSL they keep Electron's own ad-hoc
+signatures, since electron-builder can't sign on Linux. The app needs macOS 13 Ventura or newer. Step-by-step guide and
+test checklist (Bahasa Indonesia): [`docs/BUILD-MAC.md`](docs/BUILD-MAC.md).
 
 ### Build the Android app (APK)
 

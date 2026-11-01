@@ -46,7 +46,7 @@
     // allows this app's origin to read it (.htaccess); a failure is null and blocks nothing.
     async checkUpdate() {
       try {
-        const r = await fetch("https://trydesk.ai.id/version.json", { cache: "no-store" });
+        const r = await fetch("https://trydesk.ai.id/update/version.json", { cache: "no-store" });
         if (!r.ok) return null;
         const j = JSON.parse((await r.text()).slice(0, 8192));
         const ver = (v) => (typeof v === "string" && /^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(v) ? v : null);

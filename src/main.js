@@ -207,6 +207,25 @@ function createTray() {
     refreshTray();
   } catch (e) { logInfo("tray failed: " + e.message); tray = null; }
 }
+// ─── macOS menu bar ───────────────────────────────────────
+// On a Mac, Cmd+C/V/X/A/Z only work in text fields when the app menu has an Edit menu, so it is there while you
+// type. While a remote PC is being controlled the menu drops every shortcut: Cmd+C must reach the remote PC (the
+// page sends it as Ctrl+C), not copy on this Mac. Cmd+Q asks first when a session is live, like "Keluar" in the tray.
+function setMacMenu(controlling) {
+  if (process.platform !== "darwin") return;
+  const quit = { label: L("Keluar dari TryDesk", "Quit TryDesk"), click: requestQuit };
+  if (!controlling) quit.accelerator = "Cmd+Q";
+  const appMenu = { label: "TryDesk", submenu: [
+    { role: "about", label: L("Tentang TryDesk", "About TryDesk") },
+    { type: "separator" },
+    controlling ? { label: L("Sembunyikan TryDesk", "Hide TryDesk"), click: () => app.hide() } : { role: "hide", label: L("Sembunyikan TryDesk", "Hide TryDesk") },
+    { type: "separator" },
+    quit,
+  ] };
+  const template = controlling ? [appMenu] : [appMenu, { role: "editMenu", label: L("Edit", "Edit") }, { role: "windowMenu", label: L("Jendela", "Window") }];
+  try { Menu.setApplicationMenu(Menu.buildFromTemplate(template)); } catch (e) { logInfo("mac menu failed: " + e.message); }
+}
+
 // "Keluar": the page asks first when a session is live (same question as before), then calls quit-app.
 function requestQuit() {
   if (!mainWindow || !_windowReady) { _quitting = true; app.quit(); return; }
@@ -419,6 +438,9 @@ app.whenReady().then(async () => {
     }
   } catch (e) { logInfo("session setup error: " + e.message); }
   createTray();
+  setMacMenu(false);
+  // macOS: clicking the Dock icon brings back a window that was closed to the menu bar.
+  app.on("activate", showMainWindow);
   try { createWindow(); logInfo("window created"); } catch (e) { logCrash("createWindow gagal", e); try { app.exit(1); } catch {} return; }
   // Watchdog: if the renderer never finishes loading, leave a breadcrumb (diagnose.ps1 reads it).
   setTimeout(() => { if (!_windowReady) logInfo("WARNING: renderer not loaded after 15s"); }, 15000);
@@ -492,6 +514,7 @@ app.whenReady().then(async () => {
     if (want === _kbWantCapture) return;
     _kbWantCapture = want;
     refreshKeyHook();
+    setMacMenu(want);
     if (!want) { try { mainWindow.webContents.send("release-keys"); } catch {} }
   });
   // Native game-mouse capture: engaged automatically when a game is detected on the remote (no click/gesture).
@@ -531,28 +554,30 @@ app.whenReady().then(async () => {
   try { discordRPC.init(logInfo); } catch (e) { logInfo("discord RPC init skipped: " + e.message); }
   // The renderer reports session state ("idle" | "hosting" | "viewing") so the presence reflects what's happening.
   ipcMain.on("discord-activity", (_e, state) => { try { discordRPC.setActivity(String(state || "idle")); } catch {} });
-  ipcMain.on("set-ui-language", (_e, l) => { _uiLang = l === "en" ? "en" : "id"; try { discordRPC.setLanguage(_uiLang); } catch {} refreshTray(); });
+  ipcMain.on("set-ui-language", (_e, l) => { _uiLang = l === "en" ? "en" : "id"; try { discordRPC.setLanguage(_uiLang); } catch {} refreshTray(); setMacMenu(_kbWantCapture); });
 });
 app.on("window-all-closed", () => app.quit());
 app.on("before-quit", () => { _quitting = true; try { tray && tray.destroy(); } catch {} tray = null; });
 app.on("before-quit", () => { try { disableBlackScreen(); } catch {} try { disableInputLock(); } catch {} try { inputSim.stopKeyHook && inputSim.stopKeyHook(); } catch {} try { inputSim.stopMouseHook && inputSim.stopMouseHook(); } catch {} try { discordRPC.shutdown(); } catch {} });
 
-// platform: the page turns Windows-only parts off elsewhere (Linux is a viewer-only build for now).
+// platform: the page turns Windows-only parts off elsewhere (Linux and macOS are viewer-only builds).
 // osRelease: the device's OS, sent along when the app signs in to the server. Windows 10 and 11 share one User-Agent, so
-// the build number ("10.0.22631") is the only way to tell them apart; on Linux the distro name is more useful.
+// the build number ("10.0.22631") is the only way to tell them apart; on Linux the distro name is more useful, and on
+// a Mac the macOS version ("macOS 26.1"), since os.release() there is the Darwin kernel number.
 function osRelease() {
   if (process.platform === "linux") {
     try { const m = fs.readFileSync("/etc/os-release", "utf8").match(/^PRETTY_NAME="?([^"\n]+)"?/m); if (m) return m[1].slice(0, 60); } catch {}
   }
+  if (process.platform === "darwin") { try { return `macOS ${process.getSystemVersion()}`; } catch {} }
   return os.release();
 }
 ipcMain.handle("get-config", () => ({ ...config, appVersion: app.getVersion(), platform: process.platform, osRelease: osRelease() }));
 
-// Update check: https://trydesk.ai.id/version.json says the newest version and the oldest one still considered
+// Update check: https://trydesk.ai.id/update/version.json says the newest version and the oldest one still considered
 // safe ({ latest, minimum, url, notes: { id, en } }). Fetched here (not in the page) so the page's CSP stays as tight
 // as it is. Only well-formed fields go back; anything else — offline, a bad answer — is null and blocks nothing.
 // TRYDESK_UPDATE_URL lets a local test point the check at http://127.0.0.1 (nothing else is accepted).
-const UPDATE_URL = /^http:\/\/(127\.0\.0\.1|localhost):\d+\/[\w./-]*$/.test(process.env.TRYDESK_UPDATE_URL || "") ? process.env.TRYDESK_UPDATE_URL : "https://trydesk.ai.id/version.json";
+const UPDATE_URL = /^http:\/\/(127\.0\.0\.1|localhost):\d+\/[\w./-]*$/.test(process.env.TRYDESK_UPDATE_URL || "") ? process.env.TRYDESK_UPDATE_URL : "https://trydesk.ai.id/update/version.json";
 ipcMain.handle("check-update", async () => {
   try {
     const { net } = require("electron");

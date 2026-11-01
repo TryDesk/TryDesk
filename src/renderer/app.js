@@ -478,6 +478,8 @@ const TEXT_EN = {
   "TryDesk dibuka ulang sebagai administrator": "TryDesk restarted as administrator",
   "TryDesk untuk Linux saat ini hanya bisa mengontrol PC lain. PC ini belum bisa dikontrol dari jarak jauh.": "TryDesk for Linux can control other PCs for now. This PC can't be controlled remotely yet.",
   "PC ini memakai TryDesk untuk Linux, yang saat ini hanya bisa mengontrol PC lain": "This PC runs TryDesk for Linux, which can only control other PCs for now",
+  "TryDesk untuk macOS hanya bisa mengontrol PC Windows. Mac ini tidak bisa dikontrol dari jarak jauh.": "TryDesk for macOS controls Windows PCs. This Mac can't be controlled remotely.",
+  "Perangkat ini memakai TryDesk untuk macOS, yang hanya bisa mengontrol PC Windows": "This device runs TryDesk for macOS, which only controls Windows PCs",
   "TryDesk dibuka ulang sebagai administrator. Jendela baru muncul dalam beberapa detik, jangan buka TryDesk lagi sebelum itu.": "TryDesk is restarting as administrator. The new window appears in a few seconds; don't open TryDesk again before then.",
   "TryDesk administrator tidak jadi terbuka karena TryDesk ini sudah berjalan. Klik kanan ikon TryDesk di tray → Keluar, lalu pilih Jalankan sebagai administrator lagi.": "The administrator TryDesk didn't open because this TryDesk was already running. Right-click the TryDesk tray icon → Quit, then choose Run as administrator again.",
   // Hosting screen
@@ -518,6 +520,7 @@ const TEXT_EN = {
   // Game mode
   "Mode lihat saja aktif — matikan dulu untuk mode game": "View-only mode is on — turn it off for game mode",
   "🎮 Mode game aktif — tekan Pause (atau Ctrl+Alt+Shift+Esc) untuk lepas kontrol": "🎮 Game mode on — press Pause (or Ctrl+Alt+Shift+Esc) to release control",
+  "🎮 Mode game aktif — tekan Esc untuk lepas mouse": "🎮 Game mode on — press Esc to release the mouse",
   "Mode game: klik layar untuk ambil kontrol mouse": "Game mode: click the screen to take mouse control",
   "Mouse tidak bisa dikunci untuk mode game (pointer lock ditolak)": "Couldn't lock the mouse for game mode (pointer lock refused)",
   "Mode game aktif — gerakan mouse relatif. Tekan Esc untuk keluar": "Game mode on — relative mouse movement. Press Esc to exit",
@@ -1059,8 +1062,9 @@ function connectSignaling() {
     reconnectTimer = setTimeout(connectSignaling, 3000);
   };
 }
-// Desktop builds other than Windows (Linux for now) only control other PCs; the phone app has its own layer.
+// Desktop builds other than Windows (Linux, macOS) only control other PCs; the phone app has its own layer.
 function viewerOnlyDesktop() { return !window.TD_MOBILE && !!config && !!config.platform && config.platform !== "win32"; }
+function isMacViewer() { return !window.TD_MOBILE && !!config && config.platform === "darwin"; }
 function platformName() { return window.TD_MOBILE ? "android" : config && config.platform === "linux" ? "linux" : config && config.platform === "darwin" ? "macos" : "windows"; }
 function sendSignal(data) {
   if (data && isLanId(data.targetId)) { lanSignal(data); return; }
@@ -1660,7 +1664,7 @@ function pwFailed(id) {
 async function handleIncoming(msg) {
   if (updateRequired) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: "PC tujuan memakai versi TryDesk lama yang wajib diperbarui" }); return; }
   // The Linux build can control other PCs but can't be controlled yet (screen capture + input are Windows code).
-  if (viewerOnlyDesktop()) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: "PC ini memakai TryDesk untuk Linux, yang saat ini hanya bisa mengontrol PC lain" }); return; }
+  if (viewerOnlyDesktop()) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: isMacViewer() ? "Perangkat ini memakai TryDesk untuk macOS, yang hanya bisa mengontrol PC Windows" : "PC ini memakai TryDesk untuk Linux, yang saat ini hanya bisa mengontrol PC lain" }); return; }
   // An accept dialog or password challenge is already in flight for another requester — reject this
   // one instead of stacking (which would corrupt state and double-start a session).
   // Exception: a LAN password round in progress never makes the PC "busy" for someone asking by ID — a stranger on
@@ -3997,7 +4001,8 @@ function showGameBanner(on) {
     if (!b) {
       b = document.createElement("div");
       b.id = "game-banner";
-      b.textContent = "🎮 Mode game aktif — tekan Pause (atau Ctrl+Alt+Shift+Esc) untuk lepas kontrol";
+      // Mac and Linux lock the mouse with the browser's pointer lock, which Esc always releases (no Pause key there).
+      b.textContent = viewerOnlyDesktop() ? "🎮 Mode game aktif — tekan Esc untuk lepas mouse" : "🎮 Mode game aktif — tekan Pause (atau Ctrl+Alt+Shift+Esc) untuk lepas kontrol";
       document.body.appendChild(b);
     }
     b.style.display = "";
@@ -4137,6 +4142,9 @@ function setupInputCapture() {
     sendInput({ action: "scroll", deltaX: toTicks(e.deltaX), deltaY: toTicks(e.deltaY) });
   }, { passive: false });
   const pressedKeys = new Set();
+  // macOS viewer: Cmd does on a Mac what Ctrl does on Windows, so Cmd reaches the remote PC as Ctrl. Its own key
+  // codes (91/93, 224 in some layouts) would be the Windows key and the Menu key there: Cmd+C would arrive as Win+C.
+  const MAC_CMD = new Set([91, 93, 224]), MODIFIER_VKS = new Set([16, 17, 18, 91, 92, 93, 224]);
   for (const type of ["keydown", "keyup"]) {
     document.addEventListener(type, (e) => {
       if (!active || active.role !== "viewer" || $("#screen-remote").classList.contains("hidden")) return;
@@ -4145,8 +4153,17 @@ function setupInputCapture() {
       // Forward every key to the remote (Space included). preventDefault stops the browser from
       // scrolling the page or triggering its own shortcuts so the keystroke only goes to the host.
       e.preventDefault();
-      if (type === "keydown") pressedKeys.add(e.keyCode); else pressedKeys.delete(e.keyCode);
-      sendInput({ action: type, vk: e.keyCode });
+      const mac = isMacViewer();
+      const vk = mac && MAC_CMD.has(e.keyCode) ? 17 : e.keyCode;
+      // macOS sends no keyup for a key pressed while Cmd is held, so that key (the C of Cmd+C) is let go right
+      // away; otherwise it would stay pressed on the remote PC.
+      if (mac && e.metaKey && type === "keydown" && !MODIFIER_VKS.has(e.keyCode)) {
+        sendInput({ action: "keydown", vk });
+        sendInput({ action: "keyup", vk });
+        return;
+      }
+      if (type === "keydown") pressedKeys.add(vk); else pressedKeys.delete(vk);
+      sendInput({ action: type, vk });
     });
   }
   // Release every still-held key when the viewer loses focus (Alt+Tab, click away, minimize). Without
@@ -4964,7 +4981,7 @@ $("#update-dismiss").addEventListener("click", () => { if (updateInfo) store.set
   serverUrl = config.signalingServer;
   if (viewerOnlyDesktop()) {
     // Say what this build does instead of offering an ID nobody can connect to; hide Windows-only settings.
-    const note = $(".id-note"); if (note) { note.removeAttribute("data-i18n"); note.textContent = tr("TryDesk untuk Linux saat ini hanya bisa mengontrol PC lain. PC ini belum bisa dikontrol dari jarak jauh."); }
+    const note = $(".id-note"); if (note) { note.removeAttribute("data-i18n"); note.textContent = tr(isMacViewer() ? "TryDesk untuk macOS hanya bisa mengontrol PC Windows. Mac ini tidak bisa dikontrol dari jarak jauh." : "TryDesk untuk Linux saat ini hanya bisa mengontrol PC lain. PC ini belum bisa dikontrol dari jarak jauh."); }
     $("#setting-startup")?.closest(".setting-group")?.style.setProperty("display", "none");
   }
   // Only a PC that can be controlled listens for LAN requests; the Linux and phone builds still connect BY IP.
