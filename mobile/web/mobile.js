@@ -29,7 +29,7 @@
     "Aplikasi HP ini hanya untuk mengontrol PC. Untuk dikontrol dari jauh, pasang TryDesk di PC Windows.":
       "This phone app only controls PCs. To be controlled remotely, install TryDesk on a Windows PC.",
     "Runtime": "Runtime",
-    "Perangkat": "Devices", "Navigasi": "Navigation",
+    "Perangkat": "Devices", "Navigasi": "Navigation", "Sambungkan PC lain": "Connect another PC",
     "Mode game": "Game mode", "Mode game mati": "Game mode off", "Klik kiri": "Left click", "Klik kanan": "Right click",
     "Mode game: geser = arahkan kamera · ketuk = klik · tahan = tahan klik · ketuk 2 jari = klik kanan":
       "Game mode: slide = look around · tap = click · hold = hold click · 2-finger tap = right click",
@@ -55,16 +55,16 @@
     "#setting-bw-limit", "#setting-prevent-sleep", "#setting-default-scale", "#setting-hw-accel"];
   for (const sel of HIDE_GROUPS) { const g = $(sel)?.closest(".setting-group"); if (g) g.classList.add("m-hide"); }
   $('.stab[data-tab="tab-security"]')?.classList.add("m-hide");
+  // Clipboard sync only runs PC → phone here (Android gives the page no clipboard read), and the Control Center
+  // already leaves it out; the quality panel's switch for it went too, so neither place offers a half feature.
+  $("#clipboard-toggle")?.closest(".qp-group")?.classList.add("m-hide");
   $$(".about-row").forEach((r) => { const b = r.querySelector("b"); if (b && /Electron/.test(b.textContent)) b.textContent = "Android WebView + WebRTC"; });
   const note = $(".connect-section");
   if (note) {
     const lead = document.createElement("p"); lead.className = "m-lead"; lead.textContent = "Hubungkan ke PC Windows yang menjalankan TryDesk";
     note.prepend(lead);
     const foot = document.createElement("p"); foot.className = "m-foot"; foot.textContent = "Aplikasi HP ini hanya untuk mengontrol PC. Untuk dikontrol dari jauh, pasang TryDesk di PC Windows.";
-    note.append(foot);   // inside the connect card, under the LAN link
-    // The version, where people look (the desktop shows it in the bottom bar, which a phone hides).
-    const ver = (window.TD_MOBILE && window.TD_MOBILE.version) || "";
-    if (ver) { const v = document.createElement("p"); v.className = "m-foot m-ver"; v.textContent = `TryDesk v${ver}`; note.append(v); }
+    note.append(foot);   // inside the connect card, under the LAN link (the version is in Pengaturan → Tentang)
   }
   // Connection state in the top bar (the bottom status bar is hidden on a phone): a short label that follows the
   // status dot, the full message on tap.
@@ -106,11 +106,14 @@
   document.body.appendChild(tabBar);
   let homeTabM = store.get("m.tab") === "devices" ? "devices" : "connect";
   const settingsOpen = () => !$("#overlay-settings").classList.contains("hidden");
+  // The "Connect by IP" help is a full page of its own: the bar sat on top of it (z-index 120 vs 50) and covered
+  // its "Mengerti" button (user report), so it goes away while the help is open, like on the password page.
+  const lanHelpOpen = () => { const o = $("#overlay-lan-help"); return !!o && !o.classList.contains("hidden"); };
   function paintTabs() {
     const cur = settingsOpen() ? "settings" : homeTabM;
     tabBar.querySelectorAll(".m-tab").forEach((b) => { const on = b.dataset.tab === cur; b.classList.toggle("active", on); b.setAttribute("aria-current", on ? "page" : "false"); });
     document.documentElement.dataset.mtab = homeTabM;
-    tabBar.classList.toggle("hidden", $("#screen-home").classList.contains("hidden"));
+    tabBar.classList.toggle("hidden", $("#screen-home").classList.contains("hidden") || lanHelpOpen());
   }
   tabBar.addEventListener("click", (e) => {
     const b = e.target.closest(".m-tab"); if (!b) return;
@@ -125,6 +128,7 @@
   });
   new MutationObserver(paintTabs).observe($("#overlay-settings"), { attributes: true, attributeFilter: ["class"] });
   new MutationObserver(paintTabs).observe($("#screen-home"), { attributes: true, attributeFilter: ["class"] });
+  if ($("#overlay-lan-help")) new MutationObserver(paintTabs).observe($("#overlay-lan-help"), { attributes: true, attributeFilter: ["class"] });
   paintTabs();
 
   const idField = $("#remote-id");
@@ -141,8 +145,11 @@
   // Enter / the keyboard's "Go" key is handled by app.js itself — a second listener here started the same
   // connection twice, which threw the user off the Connecting screen (and its password box).
 
-  // ── Control Center on a phone: no file transfer / screenshots / recording / game mouse / clipboard polling ──
-  const MOBILE_OFF = /^(Transfer file|Ambil screenshot|Rekam sesi|Hentikan rekaman|Mode game|Sinkron clipboard)/;
+  // ── Control Center on a phone: no file transfer / game mouse (the toolbar has its own) / clipboard polling ──
+  // Screenshots and recordings stay when the native TdFile plugin is there to put them in the gallery.
+  const canSaveMedia = !!(Cap && Cap.isNativePlatform && Cap.isNativePlatform());
+  const MOBILE_OFF = canSaveMedia ? /^(Transfer file|Mode game|Sinkron clipboard)/
+    : /^(Transfer file|Ambil screenshot|Rekam sesi|Hentikan rekaman|Mode game|Sinkron clipboard)/;
   const _ccItems = ccItems;
   ccItems = (cat) => {
     if (cat === "window") {
@@ -161,6 +168,12 @@
     _ccRender();
     // drop "Layar penuh" (the app is already full-screen on a phone); keep "Putuskan koneksi"
     $$("#control-center > .cc-leaf:not(.danger)").forEach((l) => l.remove());
+    // The desktop's "＋" tab: a second PC while this one keeps running. The "Kembali ke sesi" button on Home (and
+    // a running PC's tile) lead back.
+    const add = document.createElement("button"); add.className = "cc-leaf";
+    add.innerHTML = `${ccSvg('<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>', 15)}<span>Sambungkan PC lain</span>`;
+    add.addEventListener("click", (e) => { e.stopPropagation(); ccClose(); homeTabM = "connect"; store.set("m.tab", "connect"); openNewConnection(); paintTabs(); });
+    $("#control-center").insertBefore(add, $("#control-center > .cc-leaf.danger"));
   };
   // On a phone the sub-menu opens as a sheet over the Control Center, so it needs its own way back.
   const _ccOpenFlyout = ccOpenFlyout;
@@ -561,9 +574,10 @@
     showToast(gameOn ? "Mode game: geser = arahkan kamera · ketuk = klik · tahan = tahan klik · ketuk 2 jari = klik kanan" : "Mode game mati");
   });
   $("#m-btn-menu").addEventListener("click", () => $("#btn-control-center").click());
-  // Landscape lock (default on): the PC picture is wide, so a session turns the phone sideways. The button
-  // lets the screen follow the phone again; the choice is remembered.
-  const landscapeOn = () => store.get("m.landscape") !== "0";
+  // Landscape lock (off by default, the rotate button turns it on; the choice is remembered). Forcing landscape at
+  // every session broke where the window can't turn: Google Play Games on PC kept a portrait window and squeezed the
+  // sideways page into its top third (user report, 2 Nov). Following the phone works everywhere.
+  const landscapeOn = () => store.get("m.landscape") === "1";
   const applyScreen = () => setScreen({ immersive: true, orientation: landscapeOn() ? "landscape" : "auto" });
   const renderRotateBtn = () => $("#m-btn-rotate").classList.toggle("on", landscapeOn());
   renderRotateBtn();
@@ -588,7 +602,7 @@
       applyScreen();   // full screen, and landscape unless the user turned that off
       try { if (!wakeLock && navigator.wakeLock) wakeLock = await navigator.wakeLock.request("screen"); } catch {}
       if (!hinted) { hinted = true; store.set("m.hinted", "1"); setTimeout(() => showToast("Ketuk = klik · tahan lalu geser = seret · 2 jari = scroll · ketuk 2 jari = klik kanan · cubit = zoom"), 1200); }
-      else if (!ScreenPlugin && innerHeight > innerWidth) setTimeout(() => showToast("Putar HP ke landscape untuk tampilan lebih besar"), 1200);
+      else if (!landscapeOn() && innerHeight > innerWidth) setTimeout(() => showToast("Putar HP ke landscape untuk tampilan lebih besar"), 1200);
     } else {
       setScreen({ immersive: false, orientation: "auto" });
       try { await wakeLock?.release(); } catch {} wakeLock = null;
@@ -663,6 +677,7 @@
       if (open("#quality-panel")) return $("#btn-quality-close").click();
       if (open("#chat-panel")) return closeChat();
       if (open("#overlay-settings")) return toggleSettings();
+      if (open("#overlay-lan-help")) return $("#btn-lan-help-ok").click();
       if (document.activeElement === kbd) return kbd.blur();
       if (!keysBar.classList.contains("hidden")) return $("#m-btn-keys").click();
       if (open("#screen-connecting") && active) { stopReconnect(active.peerId); return closeSession(active, false); }

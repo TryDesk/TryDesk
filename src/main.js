@@ -17,6 +17,17 @@ try {
 // Properly-capitalised app name → the user-data folder becomes %APPDATA%\TryDesk (not "trydesk").
 // MUST run before any app.getPath("userData") call below.
 try { app.setName("TryDesk"); } catch {}
+// Started by the TryDesk Windows service (trydesk-service.exe) as SYSTEM in the session that owns the screen: an
+// unattended host with its own data folder under %ProgramData% (its own ID, apart from the user's TryDesk), no
+// window, no tray, and connections only with the access password set for the service (service.json, written by
+// an administrator). MUST be set before anything below reads the user-data path.
+const _serviceHost = process.platform === "win32" && process.argv.includes("--service-host");
+const _serviceDir = path.join(process.env.ProgramData || "C:\\ProgramData", "TryDesk");
+if (_serviceHost) { try { app.setPath("userData", path.join(_serviceDir, "service-host")); } catch {} }
+function servicePasswordHash() {
+  // In service-host (SYSTEM + Administrators only), not the top folder users can read (that was 1.3.1).
+  try { const j = JSON.parse(fs.readFileSync(path.join(_serviceDir, "service-host", "service.json"), "utf8")); return /^[0-9a-f]{32}:[0-9a-f]{64}$/.test(j.passwordHash || "") ? j.passwordHash : ""; } catch { return ""; }
+}
 // One-time: correct the on-disk case of an older lowercase "trydesk" user-data folder. Windows is
 // case-insensitive so all stored data (ID, settings, localStorage) is preserved — this only fixes how the
 // folder name is displayed. Done before anything opens a file inside it. A two-step rename forces the
@@ -67,8 +78,19 @@ if (_forceNoGpu) { try { app.disableHardwareAcceleration(); } catch {} }
 // other PC keeps the default capturer. --wgc forces it for testing.
 let _wgcFlag = null;
 try { _wgcFlag = path.join(app.getPath("userData"), "wgc-capture.flag"); } catch {}
-const _wgcOn = process.argv.includes("--wgc") || (() => { try { return !!_wgcFlag && fs.existsSync(_wgcFlag); } catch { return false; } })();
+// Inside a Remote Desktop (RDP) session WGC sent only black frames (rented RDP PC, 2026-11-02: black with the
+// window full-screen or not), while DXGI capture of the same session showed the desktop. There WGC is switched
+// off so Chromium uses DXGI / GDI; in Windows Sandbox (also a remote session) that kept the picture (measured).
+// Asked from Windows itself (SM_REMOTESESSION): SESSIONNAME alone missed it in a copy run as administrator — that
+// environment has no SESSIONNAME, so WGC stayed on and every capture failed ("Could not start video source", the
+// viewer could not connect; rented PC, 2026-11-02).
+const _rdpSession = process.platform === "win32" && (() => {
+  if (/^RDP-/i.test(process.env.SESSIONNAME || "")) return true;
+  try { return !!require("koffi").load("user32.dll").func("int __stdcall GetSystemMetrics(int nIndex)")(0x1000); } catch { return false; }
+})();
+const _wgcOn = !_rdpSession && (process.argv.includes("--wgc") || (() => { try { return !!_wgcFlag && fs.existsSync(_wgcFlag); } catch { return false; } })());
 if (_wgcOn) { try { app.commandLine.appendSwitch("enable-features", "AllowWgcScreenCapturer"); } catch {} }
+if (_rdpSession) { try { app.commandLine.appendSwitch("disable-features", "AllowWgcScreenCapturer,AllowWgcWindowCapturer"); } catch {} }
 
 // Language for text the main process shows itself (dialogs, black-screen overlay, Discord presence). The
 // renderer reports the user's choice; until then follow Windows, exactly like the renderer's default.
@@ -107,7 +129,7 @@ function logCrash(tag, err) {
 function logInfo(msg) { appendLog(`[${new Date().toISOString()}] boot: ${msg}\n`); }
 // Build stamp (packaged app.asar mtime) so a log shows WHICH build a client PC is really running.
 const _buildStamp = (() => { try { return require("original-fs").statSync(path.join(process.resourcesPath, "app.asar")).mtime.toISOString(); } catch { return "dev"; } })();
-logInfo(`module loaded — electron ${process.versions.electron}, ${process.platform} ${process.arch}, build ${_buildStamp}, no-gpu=${_forceNoGpu}${_vmGuest ? ` (vm: ${_vmGuest})` : ""}, wgc=${_wgcOn}`);
+logInfo(`module loaded — electron ${process.versions.electron}, ${process.platform} ${process.arch}, build ${_buildStamp}, no-gpu=${_forceNoGpu}${_vmGuest ? ` (vm: ${_vmGuest})` : ""}, wgc=${_wgcOn}${_rdpSession ? " (rdp session: wgc off)" : ""}`);
 let _windowReady = false;   // true once the renderer has loaded
 // A crash BEFORE the window loads is startup-fatal: show it, then EXIT — so a half-dead process
 // doesn't linger holding the single-instance lock (which would make the next open "do nothing").
@@ -331,7 +353,15 @@ function createWindow() {
       sandbox: true,
       webSecurity: true,
       allowRunningInsecureContent: false,
+      devTools: !app.isPackaged,   // a released build has no DevTools at all (the service's host runs as SYSTEM)
     },
+  });
+  // No default menu on Windows/Linux: the window is frameless and the default one only brought Electron's own
+  // shortcuts (Ctrl+Shift+I, Ctrl+R) into a window that may belong to the SYSTEM service.
+  if (process.platform !== "darwin") { try { Menu.setApplicationMenu(null); } catch {} }
+  if (_serviceHost) mainWindow.webContents.on("before-input-event", (ev, input) => {
+    const k = String(input.key || "").toLowerCase();
+    if (k === "f12" || (input.control && input.shift && (k === "i" || k === "j" || k === "c")) || (input.control && k === "r") || k === "f5") ev.preventDefault();
   });
   // The taskbar button takes its icon and "pin" target from these window properties — the TryDesk exe itself
   // (for the portable build: the portable file, not its temp-extracted copy).
@@ -340,12 +370,15 @@ function createWindow() {
   } catch {}
   mainWindow.loadFile(path.join(__dirname, "renderer", "index.html"));
   mainWindow.webContents.on("did-finish-load", () => {
-    _windowReady = true; logInfo("renderer loaded");
+    _windowReady = true; logInfo("renderer loaded" + (_serviceHost ? " (service host)" : ""));
+    if (_serviceHost) return;                             // the service's host never shows a window
     if (_startInTray && tray) return;                     // Windows login start: stay in the tray
     try { mainWindow.show(); mainWindow.focus(); } catch {}
   });
   // Alt+F4 / the taskbar's "Close window": same as the X button — hide to the tray, unless really quitting.
   mainWindow.on("close", (e) => {
+    // The service's host only shows its window for a request or a running session: closing it just hides it.
+    if (_serviceHost && !_quitting) { e.preventDefault(); mainWindow.hide(); return; }
     if (_quitting || !tray) return;
     e.preventDefault();
     try { mainWindow.webContents.send("close-requested"); } catch { mainWindow.hide(); }
@@ -394,7 +427,7 @@ app.whenReady().then(async () => {
   logInfo("app ready" + (inputReady && inputSim.isElevated() ? " (administrator)" : ""));
   // Relaunch ONCE into WGC before any window exists when a monitor is invisible to the default capturer,
   // so the very first session can already stream it. Bounded wait: never delays startup by more than 2s.
-  if (!_wgcOn && _wgcFlag) {
+  if (!_wgcOn && _wgcFlag && !_rdpSession) {   // in RDP WGC stays off, so relaunching into it would loop
     try {
       const r = await Promise.race([captureCoverageGap(), new Promise((res) => setTimeout(() => res(null), 2000))]);
       if (r && r.gap) {
@@ -437,7 +470,7 @@ app.whenReady().then(async () => {
       });
     }
   } catch (e) { logInfo("session setup error: " + e.message); }
-  createTray();
+  if (!_serviceHost) createTray();
   setMacMenu(false);
   // macOS: clicking the Dock icon brings back a window that was closed to the menu bar.
   app.on("activate", showMainWindow);
@@ -538,20 +571,39 @@ app.whenReady().then(async () => {
   });
   // When the host's own display resolution/scale changes, tell the renderer to re-capture cleanly
   // (prevents the decoder-garbage flicker and keeps remote input mapping aligned to the new size).
-  let displayChangeTimer = null;
+  let displayChangeTimer = null, displayForce = false;
+  const sendDisplayChanged = (force) => {
+    displayForce = displayForce || force;
+    // Coalesce bursts (games/sandboxes fire these rapidly) — the renderer also no-ops when the captured
+    // size is unchanged, so this only ever reaches a real resolution change (or a display that was replaced).
+    clearTimeout(displayChangeTimer);
+    displayChangeTimer = setTimeout(() => { const f = displayForce; displayForce = false; try { mainWindow && mainWindow.webContents.send("display-changed", f); } catch {} }, 600);
+  };
   screen.on("display-metrics-changed", (_e, _display, changed) => {
     if (!changed.some((c) => c === "bounds" || c === "scaleFactor" || c === "rotation")) return;
-    // Coalesce bursts (games/sandboxes fire these rapidly) — the renderer also no-ops when the captured
-    // size is unchanged, so this only ever reaches a real resolution change.
-    clearTimeout(displayChangeTimer);
-    displayChangeTimer = setTimeout(() => { try { mainWindow && mainWindow.webContents.send("display-changed"); } catch {} }, 600);
+    sendDisplayChanged(false);
   });
+  // A display that is replaced keeps the old capture pointing at nothing: black picture. In a Remote Desktop
+  // session that happens on every reconnect / move to the console, often at the SAME size, so the size check
+  // above never fires (rented RDP PC, 2026-11-02). New or removed displays force a fresh capture, and a slow
+  // poll of the display ids catches the changes Windows doesn't report as events.
+  screen.on("display-added", () => sendDisplayChanged(true));
+  screen.on("display-removed", () => sendDisplayChanged(true));
+  let displayIds = screen.getAllDisplays().map((d) => d.id).join(",");
+  setInterval(() => {
+    const ids = screen.getAllDisplays().map((d) => d.id).join(",");
+    if (ids !== displayIds) { displayIds = ids; logInfo("displays replaced: " + ids); sendDisplayChanged(true); }
+  }, 3000);
   // Persistent panic key: release any host black-screen/input-lock if a session leaves them stuck.
   // (BlockInput swallows physical keys, so while input is locked only Ctrl+Alt+Del breaks it — Windows' rule.)
   // Tell the renderer so the host UI and the viewer's toggles show the truth afterwards.
-  try { globalShortcut.register("Ctrl+Alt+Shift+Escape", () => { disableBlackScreen(); disableInputLock(); try { mainWindow && mainWindow.webContents.send("privacy-released"); } catch {} }); } catch {}
+  // A hotkey belongs to whichever process registers it first. With the Windows service, the service's host and the
+  // user's own app both run on this desktop; only the service's host darkens the screen then, so the app yields
+  // the key (panic-key-yield) and the service keeps retrying until it holds it.
+  ensurePanicKey();
+  if (_serviceHost) setInterval(ensurePanicKey, 5000);
   // Discord Rich Presence — "Using TryDesk" on the user's profile (best-effort, silent if unavailable).
-  try { discordRPC.init(logInfo); } catch (e) { logInfo("discord RPC init skipped: " + e.message); }
+  if (!_serviceHost) { try { discordRPC.init(logInfo); } catch (e) { logInfo("discord RPC init skipped: " + e.message); } }
   // The renderer reports session state ("idle" | "hosting" | "viewing") so the presence reflects what's happening.
   ipcMain.on("discord-activity", (_e, state) => { try { discordRPC.setActivity(String(state || "idle")); } catch {} });
   ipcMain.on("set-ui-language", (_e, l) => { _uiLang = l === "en" ? "en" : "id"; try { discordRPC.setLanguage(_uiLang); } catch {} refreshTray(); setMacMenu(_kbWantCapture); });
@@ -571,7 +623,8 @@ function osRelease() {
   if (process.platform === "darwin") { try { return `macOS ${process.getSystemVersion()}`; } catch {} }
   return os.release();
 }
-ipcMain.handle("get-config", () => ({ ...config, appVersion: app.getVersion(), platform: process.platform, osRelease: osRelease() }));
+ipcMain.handle("get-config", () => ({ ...config, appVersion: app.getVersion(), platform: process.platform, osRelease: osRelease(), rdpSession: _rdpSession, serviceHost: _serviceHost, servicePwHash: _serviceHost ? servicePasswordHash() : "",
+  testNoChromiumCapture: !app.isPackaged && process.env.TRYDESK_TEST_NO_CHROMIUM_CAPTURE === "1" }));
 
 // Update check: https://trydesk.ai.id/update/version.json says the newest version and the oldest one still considered
 // safe ({ latest, minimum, url, notes: { id, en } }). Fetched here (not in the page) so the page's CSP stays as tight
@@ -589,9 +642,27 @@ ipcMain.handle("check-update", async () => {
     const note = (v) => (typeof v === "string" ? v.slice(0, 300) : "");
     const url = typeof j.url === "string" && /^https:\/\/(www\.)?trydesk\.ai\.id\//.test(j.url) ? j.url : "https://trydesk.ai.id/downloads/";
     if (!ver(j.latest)) return null;
-    return { latest: ver(j.latest), minimum: ver(j.minimum), url, notes: { id: note(j.notes && j.notes.id), en: note(j.notes && j.notes.en) } };
+    const out = { latest: ver(j.latest), minimum: ver(j.minimum), url, notes: { id: note(j.notes && j.notes.id), en: note(j.notes && j.notes.en) } };
+    // The file is signed (scripts/sign-version.mjs, key kept off the website) and checked here: whoever gets into the
+    // web hosting can change the page, but can't make every TryDesk refuse to connect ("minimum") or point it at
+    // another download. Unsigned or badly signed = no update news at all, never a forced update.
+    if (!versionJsonSigned(out, j.sig)) { logInfo("update check: version.json signature missing or invalid, ignored"); return null; }
+    const num = (v) => v.split(".").map(Number).reduce((a, b) => a * 1000 + b, 0);
+    if (out.minimum && num(out.minimum) > num(out.latest)) out.minimum = null;   // never require what is not released
+    return out;
   } catch { return null; }
 });
+const VERSION_JSON_PUBKEY = "MCowBQYDK2VwAyEALmgxboidf3mbPwbQKUYPidxLPlSdMvgjQle1fXxJu6E=";   // Ed25519, SPKI
+// The signed bytes: the five fields in a fixed order (scripts/sign-version.mjs builds the same string).
+function versionJsonCanonical(v) { return JSON.stringify({ latest: v.latest, minimum: v.minimum || "", url: v.url, notes: { id: v.notes.id, en: v.notes.en } }); }
+function versionJsonSigned(v, sig) {
+  try {
+    if (typeof sig !== "string" || !/^[A-Za-z0-9+/=]{80,100}$/.test(sig)) return false;
+    const crypto = require("crypto");
+    const key = crypto.createPublicKey({ key: Buffer.from(VERSION_JSON_PUBKEY, "base64"), format: "der", type: "spki" });
+    return crypto.verify(null, Buffer.from(versionJsonCanonical(v), "utf8"), key, Buffer.from(sig, "base64"));
+  } catch { return false; }
+}
 
 // ─── LAN direct connection ───────────────────────────────
 // "Sambung lewat IP": two PCs on the same network can start a session with no internet and no signaling server.
@@ -606,9 +677,22 @@ let lanServer = null, lanSeq = 0;
 const lanConns = new Map();   // "lan-in:<ip>#n" (someone asking this PC) / "lan:<address>" (this PC asking) -> socket
 const lanIp = (a) => String(a || "").replace(/^::ffff:/i, "");
 // 10/8, 172.16/12, 192.168/16, loopback, link-local, 100.64/10 (CGNAT — Tailscale/ZeroTier style VPNs), IPv6 ULA/link-local.
+const CGNAT_RE = /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./;
+// 100.64/10 counts as "local" only when this PC itself has such an address (a Tailscale/ZeroTier style VPN). On a
+// mobile/ISP connection that range is the carrier's shared network, where other subscribers are not neighbours.
+let _cgnatLocal = null;
+function cgnatLocal() {
+  if (_cgnatLocal === null || Date.now() - _cgnatLocal.at > 60000) {
+    let has = false;
+    try { for (const list of Object.values(os.networkInterfaces())) for (const a of list || []) if (a.family === "IPv4" && CGNAT_RE.test(a.address)) has = true; } catch {}
+    _cgnatLocal = { has, at: Date.now() };
+  }
+  return _cgnatLocal.has;
+}
 function lanPrivate(ip) {
   ip = lanIp(ip);
-  return /^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip) || /^(::1$|f[cd][0-9a-f]{2}:|fe[89ab][0-9a-f]:)/i.test(ip);
+  if (CGNAT_RE.test(ip)) return cgnatLocal();
+  return /^(10\.|127\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(ip) || /^(::1$|f[cd][0-9a-f]{2}:|fe[89ab][0-9a-f]:)/i.test(ip);
 }
 function lanAddrs() {
   const out = [];
@@ -739,6 +823,103 @@ ipcMain.handle("relaunch-as-admin", () => new Promise((resolve) => {
   } catch (e) { logInfo("relaunch-as-admin failed: " + e.message); resolve(false); }
 }));
 
+// ─── Windows service (unattended access): src/native/trydesk-service.exe ───
+// Install/uninstall run the helper elevated (one UAC prompt). Install copies this TryDesk folder to Program Files
+// (the service runs only that copy) and stores the access password hash where only administrators can write.
+const _serviceExe = path.join(__dirname, "native", "trydesk-service.exe").replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+const _serviceIdFile = path.join(_serviceDir, "service-id.txt");
+// mode: install (app, optional hash) | uninstall | set-password (hash, or "none" to remove it).
+function runServiceElevated(mode, args = {}) {
+  return new Promise((resolve) => {
+    // Paths and the hash go in through the environment, never into the command text (see relaunch-as-admin).
+    const ps = require("child_process").spawn("powershell.exe", ["-NoProfile", "-WindowStyle", "Hidden", "-Command",
+      "try { $a = switch ($env:TD_SVC_MODE) { 'install' { 'install \"' + $env:TD_SVC_APP + '\" ' + $env:TD_SVC_HASH } 'set-password' { 'set-password ' + $env:TD_SVC_HASH } default { 'uninstall' } }; " +
+      "$p = Start-Process -FilePath $env:TD_SVC_EXE -ArgumentList $a.Trim() -Verb RunAs -WindowStyle Hidden -Wait -PassThru -ErrorAction Stop; exit $p.ExitCode } catch { exit 1223 }"],
+      { stdio: "ignore", windowsHide: true, env: { ...process.env, TD_SVC_EXE: _serviceExe, TD_SVC_MODE: mode, TD_SVC_APP: args.app || "", TD_SVC_HASH: args.hash || "" } });
+    ps.on("exit", (code) => resolve(code));
+    ps.on("error", () => resolve(1));
+  });
+}
+const PW_HASH_RE = /^[0-9a-f]{32}:[0-9a-f]{64}$/;
+ipcMain.handle("service-status", () => new Promise((resolve) => {
+  if (process.platform !== "win32" || _serviceHost) return resolve({ supported: false });
+  let id = ""; try { id = fs.readFileSync(_serviceIdFile, "utf8").trim().replace(/\D/g, "").slice(0, 12); } catch {}
+  require("child_process").execFile("sc.exe", ["query", "TryDeskService"], { windowsHide: true }, (err, out) => {
+    const m = /STATE\s*:\s*\d+\s+(\w+)/.exec(String(out || ""));
+    resolve({ supported: app.isPackaged && fs.existsSync(_serviceExe), installed: !!m, state: m ? m[1] : "", id });
+  });
+}));
+ipcMain.handle("service-install", async (_e, hash) => {
+  if (process.platform !== "win32" || _serviceHost || !app.isPackaged || !fs.existsSync(_serviceExe)) return { ok: false, code: -1 };
+  hash = String(hash || "");   // optional: without one, requests get the Accept dialog
+  if (hash && !PW_HASH_RE.test(hash)) return { ok: false, code: -2 };
+  const code = await runServiceElevated("install", { app: process.execPath, hash });
+  logInfo("service install exit " + code);
+  return { ok: code === 0, code };
+});
+ipcMain.handle("service-uninstall", async () => {
+  if (process.platform !== "win32" || _serviceHost || !fs.existsSync(_serviceExe)) return { ok: false, code: -1 };
+  const code = await runServiceElevated("uninstall");
+  logInfo("service uninstall exit " + code);
+  return { ok: code === 0, code };
+});
+// The access password, set or cleared in the app, goes to the service too (admin-only file: one UAC prompt).
+ipcMain.handle("service-set-password", async (_e, hash) => {
+  if (process.platform !== "win32" || _serviceHost || !fs.existsSync(_serviceExe)) return { ok: false, code: -1 };
+  hash = String(hash || "");
+  if (hash && !PW_HASH_RE.test(hash)) return { ok: false, code: -2 };
+  const code = await runServiceElevated("set-password", { hash: hash || "none" });
+  logInfo("service set-password exit " + code);
+  return { ok: code === 0, code };
+});
+// One ID, as with AnyDesk: the app writes the ID it has been using, and the service's host takes it over the first
+// time it starts (the app then signs in with a second ID of its own, used only to control other PCs).
+const _identityFile = path.join(app.getPath("userData"), "identity.json");
+const ID_RE = /^\d{3} \d{3} \d{3}$/, TOKEN_RE = /^[0-9a-f]{16,128}$/i;
+ipcMain.on("export-identity", (_e, v) => {
+  if (_serviceHost || !v || !ID_RE.test(v.id) || !TOKEN_RE.test(v.token)) return;
+  try { fs.writeFileSync(_identityFile, JSON.stringify({ id: v.id, token: v.token })); } catch {}
+});
+// The service's host reads it from the profile of the user in its session (passed by the service: --user-profile=).
+ipcMain.handle("service-user-identity", () => {
+  if (!_serviceHost) return null;
+  const arg = process.argv.find((a) => a.startsWith("--user-profile="));
+  if (!arg) return null;
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(arg.slice(15), "AppData", "Roaming", "TryDesk", "identity.json"), "utf8"));
+    return ID_RE.test(j.id) && TOKEN_RE.test(j.token) ? { id: j.id, token: j.token } : null;
+  } catch { return null; }
+});
+// A disconnected session (RDP window closed / disconnected) has no screen at all: Windows draws nothing, so there is
+// nothing to capture. The service's host (SYSTEM) moves its own session to the console, as `tscon <id> /dest:console`
+// does: the desktop is drawn again and stays unlocked. Only for a connection that already passed the password, and
+// never when someone else is logged on at the console (that would throw them off).
+ipcMain.handle("service-attach-console", () => {
+  if (!_serviceHost) return { ok: false, why: "not the service host" };
+  try {
+    const koffi = require("koffi"), k32 = koffi.load("kernel32.dll"), wts = koffi.load("wtsapi32.dll");
+    const consoleId = k32.func("uint32 __stdcall WTSGetActiveConsoleSessionId()")();
+    const pidToSid = k32.func("int __stdcall ProcessIdToSessionId(uint32 pid, _Out_ uint32 *sid)");
+    const query = wts.func("int __stdcall WTSQuerySessionInformationW(void *h, uint32 sid, int cls, _Out_ void **buf, _Out_ uint32 *bytes)");
+    const free = wts.func("void __stdcall WTSFreeMemory(void *p)");
+    const info = (sid, cls, type) => { const b = [null], n = [0]; if (!query(null, sid, cls, b, n) || !b[0]) return null; try { return type === "str" ? koffi.decode(b[0], "char16_t", -1) : koffi.decode(b[0], "int32"); } finally { free(b[0]); } };
+    const own = [0]; if (!pidToSid(process.pid, own)) return { ok: false, why: "session unknown" };
+    if (consoleId === 0xFFFFFFFF) return { ok: false, why: "no console session" };
+    if (own[0] === consoleId) return { ok: false, why: "already on the console" };
+    if (info(own[0], 8, "int") !== 4) return { ok: false, why: "session not disconnected" };     // 8 = WTSConnectState, 4 = WTSDisconnected
+    if (info(consoleId, 5, "str")) return { ok: false, why: "another user is on the console" };   // 5 = WTSUserName
+    const ok = wts.func("int __stdcall WTSConnectSessionW(uint32 logonId, uint32 targetId, const char16_t *pwd, int wait)")(own[0], consoleId, "", 0);
+    const err = ok ? 0 : k32.func("uint32 __stdcall GetLastError()")();
+    logInfo(`service host: session ${own[0]} -> console ${consoleId}: ${ok ? "moved" : "failed " + err}`);
+    return { ok: !!ok, why: ok ? "" : "WTSConnectSession failed " + err };
+  } catch (e) { return { ok: false, why: e.message }; }
+});
+// The service's host reports its TryDesk ID so the normal app can show it (the folder is admin-only; SYSTEM writes).
+ipcMain.on("service-id", (_e, id) => {
+  if (!_serviceHost) return;
+  try { fs.writeFileSync(_serviceIdFile, String(id || "").replace(/\D/g, "").slice(0, 12)); } catch {}
+});
+
 // ─── Settings that act on the OS (Settings panel) ───
 // Start with Windows: launched with --tray so it comes up in the system tray, not as a window. An entry made by
 // an older build (no --tray) still counts as "on" and is replaced when the switch is next changed.
@@ -817,7 +998,7 @@ ipcMain.handle("get-monitors", async () => {
     if (!srcForDisplay.has(d.id) && ri < remaining.length) { srcForDisplay.set(d.id, remaining[ri]); usedSrc.add(remaining[ri].id); ri++; }
   }
   // A monitor plugged in mid-run can open the coverage gap too: remember it so the NEXT launch uses WGC.
-  if (!_wgcOn && _wgcFlag && sources.length < displays.length) { try { fs.writeFileSync(_wgcFlag, "1"); } catch {} }
+  if (!_wgcOn && _wgcFlag && !_rdpSession && sources.length < displays.length) { try { fs.writeFileSync(_wgcFlag, "1"); } catch {} }
   // Log the display↔source mapping when it changes — the first thing to read when a monitor won't switch.
   const _map = `wgc=${_wgcOn} displays=[${displays.map((d) => `${d.id}:${d.label || "?"} ${d.size.width}x${d.size.height}@${d.scaleFactor}`).join(", ")}] sources=[${sources.map((s) => `${s.id}/${s.display_id || "-"}`).join(", ")}]`;
   if (_map !== _lastMonitorMap) { _lastMonitorMap = _map; logInfo("monitors " + _map); }
@@ -835,6 +1016,118 @@ ipcMain.handle("get-monitors", async () => {
   });
 });
 
+// ─── Fast capture path (Windows, host side): src/native/trydesk-capture.exe ───
+// Chromium's screen capture tops out near 60 frames a second and adds ~35 ms (measured 2026-11-02); this helper
+// captures with DXGI and encodes on the GPU (up to 240 fps, ~2.5 ms from capture to here). It runs as its own process,
+// so a driver problem there never takes TryDesk down; when it is missing or exits, the session stays on WebRTC
+// capture. Packets go to the renderer as they arrive; the renderer sends them to the viewer.
+const _fastExe = path.join(__dirname, "native", "trydesk-capture.exe").replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+let _fast = null;   // host end: { proc }
+let _fastRecv = null;   // viewer end of the UDP link (the same exe with --recv): { proc }
+function fastAvailable() { return process.platform === "win32" && !_forceNoGpu && fs.existsSync(_fastExe); }
+function stopHelper(ref) {
+  const h = ref(); if (!h) return;
+  const p = h.proc; h.proc = null;
+  try { p.stdin.write('{"cmd":"stop"}\n'); } catch {}
+  setTimeout(() => { try { p.kill(); } catch {} }, 1000);
+}
+function stopFast() { if (_fast) { const h = _fast; _fast = null; stopHelper(() => h); } }
+function stopFastRecv() { if (_fastRecv) { const h = _fastRecv; _fastRecv = null; stopHelper(() => h); } }
+const fromMain = (e) => mainWindow && !mainWindow.isDestroyed() && e.sender === mainWindow.webContents;
+const udpKeyOk = (k) => typeof k === "string" && /^[0-9a-f]{64}$/i.test(k);
+// Addresses the UDP link may be pointed at: this LAN (or a VPN's private range) and this PC itself.
+const udpIpOk = (ip) => typeof ip === "string" && /^\d{1,3}(\.\d{1,3}){3}$/.test(ip) && (lanPrivate(ip) || ip.startsWith("127."));
+// The helper's stdout: u32 length, u8 type, u8 flags, u16 0, f64 time, payload. Whole packets only, so a frame of
+// 500 KB arriving in 64 KB pipe pieces is joined once, not on every piece (at 1 Gbps that copying added up).
+function packetReader(proc, onPacket) {
+  let parts = [], have = 0;
+  proc.stdout.on("data", (chunk) => {
+    parts.push(chunk); have += chunk.length;
+    for (;;) {
+      if (have < 16) return;
+      if (parts.length > 1) { parts = [Buffer.concat(parts)]; }
+      const buf = parts[0];
+      const len = buf.readUInt32LE(0);
+      if (len > 64 * 1024 * 1024) { try { proc.kill(); } catch {} return; }   // not our helper talking
+      if (have < 16 + len) return;
+      onPacket(buf[4], buf[5], buf.readDoubleLE(8), buf.subarray(16, 16 + len));
+      const rest = buf.subarray(16 + len); parts = rest.length ? [rest] : []; have = rest.length;
+    }
+  });
+}
+ipcMain.handle("fast-capture-available", () => fastAvailable());
+ipcMain.handle("fast-capture-start", (e, opts) => {
+  if (!fromMain(e) || !fastAvailable()) return { ok: false };
+  stopFast();
+  const d = screen.getAllDisplays().find((x) => String(x.id) === String(opts && opts.displayId)) || screen.getPrimaryDisplay();
+  // DXGI works in physical pixels; Electron's display bounds are DIP.
+  const r = process.platform === "win32" ? screen.dipToScreenRect(null, d.bounds) : d.bounds;
+  const fps = Math.max(1, Math.min(240, Math.round(Number(opts && opts.fps) || 60)));
+  const mbps = Math.max(1, Math.min(1000, Math.round(Number(opts && opts.mbps) || 50)));
+  const udp = udpKeyOk(opts && opts.udp) ? opts.udp : null;   // session key for the UDP link, handed to the helper on stdin (never on the command line)
+  let proc;
+  try { proc = require("child_process").spawn(_fastExe, ["--rect", `${r.x},${r.y},${r.width},${r.height}`, "--fps", String(fps), "--mbps", String(mbps), ...(udp ? ["--udp"] : [])], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] }); }
+  catch (err) { logInfo("fast capture spawn failed: " + err.message); return { ok: false }; }
+  const me = { proc };
+  _fast = me;
+  const send = (ch, payload) => { if (_fast === me && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(ch, payload); };
+  packetReader(proc, (type, flags, t, payload) => {
+    if (type === 1) send("fast-capture-packet", { key: !!(flags & 1), t, data: new Uint8Array(payload) });
+    else if (type === 2) { const s = payload.toString("utf8"); logInfo("fast capture " + s); send("fast-capture-info", s); }
+  });
+  proc.on("exit", (code) => { logInfo(`fast capture exited ${code}`); send("fast-capture-ended", { code }); if (_fast === me) _fast = null; });
+  proc.on("error", (err) => { logInfo("fast capture error: " + err.message); send("fast-capture-ended", { code: -1 }); if (_fast === me) _fast = null; });
+  if (udp) { try { proc.stdin.write(JSON.stringify({ cmd: "udpkey", hex: udp }) + "\n"); } catch {} }
+  logInfo(`fast capture start ${r.width}x${r.height}@${r.x},${r.y} fps=${fps} mbps=${mbps}${udp ? " udp" : ""}`);
+  return { ok: true, ips: udp ? lanAddrs() : [] };
+});
+// Only the commands the helper knows, with clamped numbers and checked addresses.
+ipcMain.on("fast-capture-cmd", (e, cmd) => {
+  if (!fromMain(e) || !_fast || !_fast.proc || !cmd) return;
+  let line = null;
+  if (cmd.cmd === "key") line = '{"cmd":"key"}';
+  else if (cmd.cmd === "rate") line = JSON.stringify({ cmd: "rate", mbps: Math.max(1, Math.min(1000, Math.round(Number(cmd.mbps) || 50))), fps: Math.max(1, Math.min(240, Math.round(Number(cmd.fps) || 60))) });
+  else if (cmd.cmd === "peer") { const port = Math.round(Number(cmd.port)); if (udpIpOk(cmd.ip) && port > 0 && port < 65536) line = JSON.stringify({ cmd: "peer", ip: cmd.ip, port }); }
+  else if (cmd.cmd === "udp") line = JSON.stringify({ cmd: "udp", on: cmd.on ? 1 : 0 });
+  if (line) { try { _fast.proc.stdin.write(line + "\n"); } catch {} }
+});
+ipcMain.on("fast-capture-stop", (e) => { if (fromMain(e)) stopFast(); });
+// Viewer end of the UDP link: the host told us its key, port and LAN addresses; our receiver sends hellos there and
+// hands whole frames to the renderer. Returns our own port and addresses so the host can send hellos back too.
+ipcMain.handle("fast-udp-recv-start", (e, opts) => {
+  if (!fromMain(e) || !fastAvailable() || !opts || !udpKeyOk(opts.key)) return { ok: false };
+  stopFastRecv();
+  const port = Math.round(Number(opts.port)); if (!(port > 0 && port < 65536)) return { ok: false };
+  const ips = (Array.isArray(opts.ips) ? opts.ips : []).filter(udpIpOk).slice(0, 8);
+  if (!ips.length) return { ok: false };
+  let proc;
+  try { proc = require("child_process").spawn(_fastExe, ["--recv", "--port", "0"], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] }); }
+  catch (err) { logInfo("fast udp recv spawn failed: " + err.message); return { ok: false }; }
+  const me = { proc };
+  _fastRecv = me;
+  const send = (ch, payload) => { if (_fastRecv === me && mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send(ch, payload); };
+  return new Promise((resolve) => {
+    let resolved = false;
+    const done = (v) => { if (!resolved) { resolved = true; resolve(v); } };
+    packetReader(proc, (type, flags, t, payload) => {
+      if (type === 1) send("fast-udp-packet", { key: !!(flags & 1), gap: !!(flags & 2), t, data: new Uint8Array(payload) });
+      else if (type === 2) {
+        const s = payload.toString("utf8"); logInfo("fast udp recv " + s); send("fast-udp-info", s);
+        let j = null; try { j = JSON.parse(s); } catch {}
+        if (j && j.udpPort > 0) {
+          try { proc.stdin.write(JSON.stringify({ cmd: "udpkey", hex: opts.key }) + "\n"); for (const ip of ips) proc.stdin.write(JSON.stringify({ cmd: "peer", ip, port }) + "\n"); } catch {}
+          done({ ok: true, port: j.udpPort, ips: lanAddrs() });
+        }
+      }
+    });
+    proc.on("exit", (code) => { logInfo(`fast udp recv exited ${code}`); send("fast-udp-ended", { code }); if (_fastRecv === me) _fastRecv = null; done({ ok: false }); });
+    proc.on("error", (err) => { logInfo("fast udp recv error: " + err.message); send("fast-udp-ended", { code: -1 }); if (_fastRecv === me) _fastRecv = null; done({ ok: false }); });
+    setTimeout(() => done({ ok: false }), 5000);
+  });
+});
+ipcMain.on("fast-udp-recv-stop", (e) => { if (fromMain(e)) stopFastRecv(); });
+app.on("will-quit", () => { stopFast(); stopFastRecv(); });
+
 let captureDisplay = null;
 ipcMain.on("set-capture-display", (_e, d) => { captureDisplay = d; });
 // Which screen getDisplayMedia should feed (monitor select). Awaitable so the renderer sets it BEFORE
@@ -851,7 +1144,16 @@ ipcMain.handle("set-dm-source", async (_e, id, displayId) => {
   return !!src;
 });
 
-ipcMain.on("focus-window", () => { if (mainWindow) { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); } });
+// pin = true: an incoming-connection request. Windows won't let an app take the foreground on its own, so the window
+// went up BEHIND whatever was open and the request ran out unseen ("Tidak ada jawaban", rented PC 2026-11-02): keep
+// it on top and flash the taskbar button until the request is answered (pin = false).
+ipcMain.on("focus-window", (_e, pin) => {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show(); mainWindow.focus();
+  if (pin === true) { try { mainWindow.setAlwaysOnTop(true, "floating"); mainWindow.moveTop(); mainWindow.flashFrame(true); } catch {} }
+  else if (pin === false) { try { mainWindow.setAlwaysOnTop(false); mainWindow.flashFrame(false); } catch {} }
+});
 ipcMain.on("minimize-window", () => mainWindow?.minimize());
 ipcMain.on("maximize-window", () => {
   if (mainWindow?.isMaximized()) mainWindow.unmaximize();
@@ -927,15 +1229,17 @@ function cleanPath(p) {
   return p;
 }
 
-ipcMain.handle("file-open-read", (_e, filePath) => {
+// Every file handle below answers TryDesk's own window only (as the fast-capture handlers do).
+ipcMain.handle("file-open-read", (e, filePath) => {
+  if (!fromMain(e)) throw new Error("not allowed");
   const id = `r${++handleSeq}`;
   const fd = fs.openSync(cleanPath(filePath), "r");
   readHandles.set(id, { fd, size: fs.fstatSync(fd).size });
   return id;
 });
 
-ipcMain.handle("file-read-chunk", (_e, { id, length }) => {
-  const h = readHandles.get(id);
+ipcMain.handle("file-read-chunk", (e, { id, length }) => {
+  const h = fromMain(e) ? readHandles.get(id) : null;
   if (!h) return null;
   const len = Math.max(1, Math.min(Number(length) || 0, 1024 * 1024));   // never allocate what the caller asks blindly
   const buf = Buffer.alloc(len);
@@ -944,12 +1248,13 @@ ipcMain.handle("file-read-chunk", (_e, { id, length }) => {
   return { done: false, chunk: new Uint8Array(buf.buffer, buf.byteOffset, n) };
 });
 
-ipcMain.handle("file-close-read", (_e, id) => {
-  const h = readHandles.get(id);
+ipcMain.handle("file-close-read", (e, id) => {
+  const h = fromMain(e) ? readHandles.get(id) : null;
   if (h) { try { fs.closeSync(h.fd); } catch {} readHandles.delete(id); }
 });
 
-ipcMain.handle("file-open-write", (_e, filePath) => {
+ipcMain.handle("file-open-write", (e, filePath) => {
+  if (!fromMain(e)) throw new Error("not allowed");
   const id = `w${++handleSeq}`;
   const p = cleanPath(filePath);
   writeHandles.set(id, { fd: fs.openSync(p, "w"), path: p });
@@ -958,7 +1263,8 @@ ipcMain.handle("file-open-write", (_e, filePath) => {
 
 // Open a write handle targeting a directory + name (used by the file manager).
 // Returns the resolved path, de-duplicated so an incoming file never silently clobbers an existing one.
-ipcMain.handle("file-open-write-in", (_e, { dir, name }) => {
+ipcMain.handle("file-open-write-in", (e, { dir, name }) => {
+  if (!fromMain(e)) throw new Error("not allowed");
   cleanPath(dir);
   if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) throw new Error("invalid directory");
   const safeName = path.basename(String(name || "file"));
@@ -974,8 +1280,8 @@ ipcMain.handle("file-open-write-in", (_e, { dir, name }) => {
   return { id, path: target };
 });
 
-ipcMain.handle("file-write-chunk", (_e, { id, chunk }) => {
-  const h = writeHandles.get(id);
+ipcMain.handle("file-write-chunk", (e, { id, chunk }) => {
+  const h = fromMain(e) ? writeHandles.get(id) : null;
   if (!h) return false;
   const buf = Buffer.from(chunk);
   fs.writeSync(h.fd, buf, 0, buf.length, null);
@@ -983,8 +1289,8 @@ ipcMain.handle("file-write-chunk", (_e, { id, chunk }) => {
 });
 
 // Deleting a cancelled partial file only ever touches the file THIS handle created — never a path the caller names.
-ipcMain.handle("file-close-write", (_e, { id, deleteFile }) => {
-  const h = writeHandles.get(id);
+ipcMain.handle("file-close-write", (e, { id, deleteFile }) => {
+  const h = fromMain(e) ? writeHandles.get(id) : null;
   if (!h) return;
   try { fs.closeSync(h.fd); } catch {}
   writeHandles.delete(id);
@@ -1036,56 +1342,136 @@ function listDirectory(dirPath) {
   return { ok: true, path: dirPath, display: dirPath, parent: atRoot ? "" : parent, isRoot: false, entries };
 }
 
-ipcMain.handle("fs-home", () => os.homedir());
-ipcMain.handle("fs-list", (_e, dirPath) => listDirectory(dirPath));
+ipcMain.handle("fs-home", (e) => (fromMain(e) ? os.homedir() : ""));
+ipcMain.handle("fs-list", (e, dirPath) => (fromMain(e) ? listDirectory(dirPath) : { ok: false, error: "not allowed", path: "", display: "" }));
 
 // ─── Black screen (privacy mode) ─────────────────────────
 const WDA_EXCLUDEFROMCAPTURE = 0x11;
 
+// One cover per display, excluded from capture before it turns opaque (see below). Returns null (and covers nothing)
+// when Windows refuses the exclusion: koffi missing, or Windows 10 before 2004, where the flag means "black in
+// captures". The viewer would then see a black screen, so the host must say "failed" instead of pretending.
+function buildBlackScreenWindow(display) {
+  const win = new BrowserWindow({
+    x: display.bounds.x,
+    y: display.bounds.y,
+    width: display.bounds.width,
+    height: display.bounds.height,
+    show: false,
+    frame: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    focusable: false,
+    transparent: false,
+    backgroundColor: "#000000",
+    webPreferences: { nodeIntegration: false, contextIsolation: true },
+  });
+  win.setAlwaysOnTop(true, "screen-saver");
+  // Click-through: the remote's injected clicks and wheel must reach the apps under the dark cover.
+  try { win.setIgnoreMouseEvents(true); } catch {}
+  win.loadURL("data:text/html,<body style=\"background:#000;margin:0;cursor:none;overflow:hidden\"><div style=\"display:flex;align-items:center;justify-content:center;height:100vh;color:%23333;font-family:sans-serif;font-size:14px\">" + L("TryDesk - Layar digelapkan", "TryDesk - Screen darkened") + "</div></body>");
+  // The exclusion only sticks on a shown window (set before the first show, Windows reports success and the cover
+  // still appears in captures: the viewer got a black picture). So: show it fully transparent, exclude it, and only
+  // then make it opaque. Neither the viewer nor the person at the PC sees an in-between frame.
+  win.setOpacity(0);
+  win.showInactive();
+  let excluded = false;
+  try {
+    const hwnd = win.getNativeWindowHandle().readUInt32LE(0);
+    excluded = !!inputSim.setWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+  } catch (e) { logInfo("black screen: SetWindowDisplayAffinity threw " + e.message); }
+  if (!excluded) { try { win.destroy(); } catch {} return null; }
+  win.setOpacity(1);
+  // Windows clamps a new window to the size limits of the display it starts on, so a portrait monitor's
+  // overlay came out 1080x1080 and left the lower part of the screen visible. Re-apply the exact bounds now
+  // that the window sits on its own display.
+  try { win.setBounds(display.bounds); } catch {}
+  win._tdDisplay = display.id;
+  return win;
+}
+
+let blackScreenTick = null;
 function enableBlackScreen() {
-  disableBlackScreen();
-  const displays = screen.getAllDisplays();
-  for (const display of displays) {
-    const win = new BrowserWindow({
-      x: display.bounds.x,
-      y: display.bounds.y,
-      width: display.bounds.width,
-      height: display.bounds.height,
-      frame: false,
-      alwaysOnTop: true,
-      skipTaskbar: true,
-      resizable: false,
-      movable: false,
-      focusable: false,
-      transparent: false,
-      backgroundColor: "#000000",
-      webPreferences: { nodeIntegration: false, contextIsolation: true },
-    });
-    win.setAlwaysOnTop(true, "screen-saver");
-    // Click-through: the remote's injected clicks and wheel must reach the apps under the dark cover.
-    try { win.setIgnoreMouseEvents(true); } catch {}
-    // Windows clamps a new window to the size limits of the display it starts on, so a portrait monitor's
-    // overlay came out 1080x1080 and left the lower part of the screen visible. Re-apply the exact bounds now
-    // that the window sits on its own display.
-    try { win.setBounds(display.bounds); } catch {}
-    win.loadURL("data:text/html,<body style=\"background:#000;margin:0;cursor:none;overflow:hidden\"><div style=\"display:flex;align-items:center;justify-content:center;height:100vh;color:%23333;font-family:sans-serif;font-size:14px\">" + L("TryDesk - Layar digelapkan", "TryDesk - Screen darkened") + "</div></body>");
-    try {
-      const hwndBuf = win.getNativeWindowHandle();
-      const hwnd = hwndBuf.readUInt32LE(0);
-      inputSim.setWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
-    } catch (e) {
-      console.warn("SetWindowDisplayAffinity failed:", e.message);
-    }
+  // Already dark: keep the same covers (closing and re-opening them showed the desktop for a moment).
+  if (blackScreenWindows.length) { syncBlackScreen(); return true; }
+  // Before Windows 10 2004 (build 19041) the exclude flag silently acts as "show black in captures" instead.
+  const build = Number(String(os.release()).split(".")[2] || 0);
+  if (process.platform === "win32" && build && build < 19041) { logInfo("black screen: Windows build " + build + " cannot exclude windows from capture"); return false; }
+  for (const display of screen.getAllDisplays()) {
+    const win = buildBlackScreenWindow(display);
+    if (!win) { disableBlackScreen(); logInfo("black screen: capture exclusion refused, not darkening"); return false; }
     blackScreenWindows.push(win);
   }
+  // Keep the covers on top and on their displays: a window raised later (Task Manager "always on top", TryDesk's
+  // own pinned window) would otherwise sit above them, and mixed-DPI monitors can resize a cover after it opens.
+  // The raise itself never moves or resizes a cover (SetWindowPos with NOMOVE | NOSIZE, input-simulator.js).
+  clearInterval(blackScreenTick);
+  blackScreenTick = setInterval(syncBlackScreen, 1000);
+  return true;
+}
+
+// Display added, removed, resized, rotated or rescaled while dark: the new area must be covered too.
+function syncBlackScreen() {
+  if (!blackScreenWindows.length) return;
+  const displays = screen.getAllDisplays();
+  const live = blackScreenWindows.filter((w) => !w.isDestroyed());
+  const byId = new Map(live.map((w) => [w._tdDisplay, w]));
+  const keep = [];
+  for (const d of displays) {
+    let w = byId.get(d.id);
+    if (w) byId.delete(d.id);
+    else {
+      w = buildBlackScreenWindow(d);
+      if (!w) {
+        // A display we can't cover without blacking out the viewer's picture: half a dark screen is no privacy, so
+        // all covers go and the viewer is told it failed (the renderer turns this into privacy-result "failed").
+        logInfo("black screen: new display could not be excluded from capture, lifting all covers");
+        for (const x of keep.concat([...byId.values()])) { try { x.destroy(); } catch {} }
+        blackScreenWindows = [];
+        disableBlackScreen();
+        try { mainWindow && mainWindow.webContents.send("privacy-released", "failed"); } catch {}
+        return;
+      }
+    }
+    const b = w.getBounds();
+    if (b.x !== d.bounds.x || b.y !== d.bounds.y || b.width !== d.bounds.width || b.height !== d.bounds.height) { try { w.setBounds(d.bounds); } catch {} }
+    try { inputSim.raiseTopmost(w.getNativeWindowHandle().readUInt32LE(0)); } catch {}
+    keep.push(w);
+  }
+  for (const w of byId.values()) { try { w.destroy(); } catch {} }   // its display is gone
+  blackScreenWindows = keep;
 }
 
 function disableBlackScreen() {
-  for (const w of blackScreenWindows) { try { w.close(); } catch {} }
+  clearInterval(blackScreenTick); blackScreenTick = null;
+  for (const w of blackScreenWindows) { try { w.destroy(); } catch {} }
   blackScreenWindows = [];
 }
 
-ipcMain.handle("enable-black-screen", () => { enableBlackScreen(); return true; });
+const PANIC_KEY = "Ctrl+Alt+Shift+Escape";
+let panicKeyYielded = false;
+function ensurePanicKey() {
+  if (panicKeyYielded) return;
+  try {
+    if (globalShortcut.isRegistered(PANIC_KEY)) return;
+    const ok = globalShortcut.register(PANIC_KEY, () => {
+      logInfo("panic key: releasing black screen and input lock");
+      disableBlackScreen(); disableInputLock();
+      try { mainWindow && mainWindow.webContents.send("privacy-released"); } catch {}
+    });
+    if (!ok && _serviceHost) return;   // the user's app still holds it; retried
+    logInfo("panic key " + PANIC_KEY + (ok ? " registered" : " NOT registered (another program holds it)"));
+  } catch {}
+}
+ipcMain.on("panic-key-yield", (_e, yieldIt) => {
+  if (_serviceHost) return;
+  panicKeyYielded = !!yieldIt;
+  try { if (panicKeyYielded) globalShortcut.unregister(PANIC_KEY); else ensurePanicKey(); } catch {}
+});
+
+ipcMain.handle("enable-black-screen", () => ({ ok: enableBlackScreen() }));
 ipcMain.handle("disable-black-screen", () => { disableBlackScreen(); return true; });
 
 // ─── Lock host input ──────────────────────────────────────
@@ -1107,5 +1493,20 @@ function disableInputLock() {
 
 ipcMain.handle("enable-input-lock", () => enableInputLock());
 ipcMain.handle("disable-input-lock", () => { disableInputLock(); return true; });
+
+// ─── The service's host runs as SYSTEM, and its window sits on the user's desktop ───
+// Anything there that opens a file dialog, a browser or a file by path would hand SYSTEM to whoever sits at the PC
+// (a Save dialog can start any program; a link opens a browser as SYSTEM), and file transfer would read or write
+// any file on the PC. All of that is switched off here, after every handler above is registered.
+if (_serviceHost) {
+  const DENY_HANDLE = ["file-pick", "file-save-dialog", "file-open-read", "file-read-chunk", "file-close-read", "file-open-write",
+    "file-open-write-in", "file-write-chunk", "file-close-write", "fs-home", "fs-list", "relaunch-as-admin", "set-login-item",
+    "set-hw-accel", "check-update", "lan-host", "lan-open"];
+  for (const ch of DENY_HANDLE) { ipcMain.removeHandler(ch); ipcMain.handle(ch, () => { throw new Error("not available in the TryDesk service"); }); }
+  for (const ch of ["open-external", "lock-workstation", "set-discord-enabled", "discord-activity"]) ipcMain.removeAllListeners(ch);
+  // Hidden again once nothing needs it (no request waiting, no session).
+  ipcMain.on("service-hide-window", () => { try { mainWindow && mainWindow.setAlwaysOnTop(false); mainWindow && mainWindow.hide(); } catch {} });
+  ipcMain.on("service-show-window", () => { try { if (mainWindow && !mainWindow.isVisible()) mainWindow.showInactive(); } catch {} });
+}
 
 app.on("will-quit", () => { disableBlackScreen(); disableInputLock(); });

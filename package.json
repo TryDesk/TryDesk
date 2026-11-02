@@ -1,6 +1,6 @@
 {
   "name": "trydesk",
-  "version": "1.3.2",
+  "version": "1.3.3",
   "description": "Free, open-source remote desktop (WebRTC P2P) for Windows, controllable from Windows, macOS, Linux and Android",
   "author": "DrWeabo (TryDesk)",
   "license": "AGPL-3.0-only",

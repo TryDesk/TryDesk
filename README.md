@@ -50,7 +50,8 @@ If you're new to programming, the friendliest place to read code first is
 - **Full keyboard** — forwards system shortcuts (Alt+Tab, Win) to the remote PC
 - **Multi-monitor** — switch between the host's displays mid-session
 - **Multi-remote tabs** — control several machines at once, each in its own tab
-- **High frame rate** — up to **240 FPS** capture via `getDisplayMedia`; above 120 FPS needs a host monitor that refreshes that fast, and the actual rate depends on the host/viewer hardware and on-screen content
+- **High frame rate** — up to **240 FPS** on a Windows host through the fast path (DXGI capture + GPU H.264 in `trydesk-capture.exe`); above 120 FPS needs a host monitor that refreshes that fast, and the actual rate depends on the host/viewer hardware and on-screen content
+- **High bitrate** — up to **1000 Mbps** between two Windows PCs on one local network over the fast path's own encrypted UDP link (measured 820 Mbps on one PC); 300 Mbps over WebRTC / the data channel elsewhere
 - **Real-time quality control** — bitrate / FPS / resolution + codec (AV1, VP9, VP8, H.264)
 - **Two-pane file manager** — browse local & remote folders, transfer both ways
 - **Chat** — in-session messaging with in-app and native notifications

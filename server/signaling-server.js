@@ -32,9 +32,21 @@ function clientVersion(ws, msg) {
   return m ? m[1] : "";
 }
 const tooOld = (ws) => !!(MIN_CLIENT_VERSION && ws && ws.ver && verLess(ws.ver, MIN_CLIENT_VERSION));
+// Text the app shows as a toast. Apps translate only the texts they already know, so a message added on the server
+// later stays Indonesian on an English screen. Apps from 1.3.2 say their language at sign-in and get just that one;
+// older ones get both, the system language (Accept-Language) first. Every user-visible server text goes through here.
+function say(ws, id, en) {
+  if (ws && ws.lang === "id") return id;
+  if (ws && ws.lang === "en") return en;
+  return ws && ws.sysId ? `${id} · ${en}` : `${en} · ${id}`;
+}
 
 const online = new Map();      // id -> ws
-const owners = new Map();      // id -> token (keeps an ID reserved for the device that owns it)
+const owners = new Map();      // id -> sha256(token) (keeps an ID reserved for the device that owns it)
+// Only a hash of the owner token is kept: whoever reads the owners file can't register as someone else's device.
+// Files written before 1.3.3 hold the raw 32-hex token; those entries are hashed the first time the device shows up.
+const tokenHash = (t) => crypto.createHash("sha256").update(String(t)).digest("hex");
+const ownerMatches = (id, token) => { const v = owners.get(id); return !!v && (v === tokenHash(token) || (v.length === 32 && v === token)); };
 // Multi-session: a client (the viewer) may control several remotes at once, so these track SETS,
 // not single values. A host stays single-session (it has at most one pairing).
 const pending = new Map();     // requesterId -> Set<targetId>  (outgoing requests awaiting accept)
@@ -68,7 +80,10 @@ function saveOwners() {
 // coturn "use-auth-secret" (TURN REST API): short-lived credentials, the secret never leaves the server
 function turnServers(id) {
   if (!TURN_SECRET || !TURN_HOST) return [];
-  const username = `${Math.floor(Date.now() / 1000) + TURN_TTL}:${id.replace(/ /g, "")}`;
+  // A random tag, not the TryDesk ID: the TURN username travels in the clear, so a sniffer must not learn which ID sits
+  // behind an address. (id is kept in the signature so the function stays the same for callers.)
+  void id;
+  const username = `${Math.floor(Date.now() / 1000) + TURN_TTL}:${crypto.randomBytes(6).toString("hex")}`;
   const credential = crypto.createHmac("sha1", TURN_SECRET).update(username).digest("base64");
   return [{
     urls: [`turn:${TURN_HOST}:${TURN_PORT}?transport=udp`, `turn:${TURN_HOST}:${TURN_PORT}?transport=tcp`],
@@ -196,7 +211,7 @@ function register(ws, msg) {
   const token = typeof msg.token === "string" && msg.token.length >= 16 ? msg.token : null;
 
   const valid = id && /^\d{3} \d{3} \d{3}$/.test(id) && token;
-  const ownedByOther = valid && owners.has(id) && owners.get(id) !== token;
+  const ownedByOther = valid && owners.has(id) && !ownerMatches(id, token);
   if (!valid || ownedByOther) id = newId();
   else if (online.has(id) && online.get(id) !== ws) {
     // The SAME device re-registering (same ID + owner token) while its previous socket still looks online:
@@ -204,13 +219,13 @@ function register(ws, msg) {
     // Handing out a fresh ID here changed the user's ID for good — take the ID over instead. The old socket's
     // close handler ignores it because `online` no longer points at it, so live pairings are kept.
     const old = online.get(id);
-    if (owners.get(id) === token) { try { old.terminate(); } catch {} }
+    if (ownerMatches(id, token)) { try { old.terminate(); } catch {} }
     else id = newId();
   }
 
   const finalToken = token || crypto.randomBytes(16).toString("hex");
-  if (owners.get(id) !== finalToken) {
-    owners.set(id, finalToken);
+  if (owners.get(id) !== tokenHash(finalToken)) {
+    owners.set(id, tokenHash(finalToken));
     capOwners();
     saveOwners();
   }
@@ -229,9 +244,14 @@ function register(ws, msg) {
       if (!live.has(peer)) { removePair(id, peer); sendTo(peer, { type: "peer-disconnected", fromId: id }); }
     }
   }
-  send(ws, { type: "registered", clientId: id, token: finalToken, iceServers: turnServers(id) });
+  // sdpMac: this server relays the "mac" on offer/answer, so 1.3.3+ hosts may insist on it for password sessions.
+  send(ws, { type: "registered", clientId: id, token: finalToken, iceServers: turnServers(id), sdpMac: true });
   ws.ver = clientVersion(ws, msg);
-  if (tooOld(ws)) send(ws, { type: "error", targetId: "update", message: `TryDesk ${ws.ver} sudah terlalu lama dan tidak bisa terhubung lagi. Perbarui ke versi terbaru di ${UPDATE_URL_TEXT}` });
+  const lang = msg.app && typeof msg.app === "object" ? msg.app.lang : "";
+  ws.lang = lang === "id" || lang === "en" ? lang : "";
+  if (tooOld(ws)) send(ws, { type: "error", code: "too-old", targetId: "update", message: say(ws,
+    `TryDesk ${ws.ver} sudah terlalu lama dan tidak bisa terhubung lagi. Perbarui ke versi terbaru di ${UPDATE_URL_TEXT}`,
+    `TryDesk ${ws.ver} is too old and can no longer connect. Update to the latest version at ${UPDATE_URL_TEXT}`) });
   console.log(`[+] ${id} (${online.size} online)`);
 }
 
@@ -244,32 +264,41 @@ function handle(ws, msg) {
   if (!me) return;
 
   switch (msg.type) {
+    case "lang":   // the user switched the app's language (1.3.2+)
+      if (msg.lang === "id" || msg.lang === "en") ws.lang = msg.lang;
+      break;
     case "connect-request": {
       // Errors name the request's target so a client with several tabs closes the right one.
       const target = typeof msg.targetId === "string" ? msg.targetId.slice(0, 16) : "";
       // Something that can never be an ID (the Android app's "td-probe" socket check) is answered at once and costs
       // no budget: it reaches nobody, and counting it used to eat the phone's own connect budget.
       if (!/^\d{3} \d{3} \d{3}$/.test(target)) {
-        send(ws, { type: "error", targetId: target, message: "ID tidak ditemukan atau sedang offline" });
+        send(ws, { type: "error", code: "offline", targetId: target, message: "ID tidak ditemukan atau sedang offline" });
         return;
       }
       if (!connReqOk(ws)) {
         note("ratelimit", { id: me, target });
-        send(ws, { type: "error", targetId: target, message: "Terlalu banyak permintaan, coba lagi sebentar" });
+        send(ws, { type: "error", code: "ratelimit", targetId: target, message: "Terlalu banyak permintaan, coba lagi sebentar" });
         return;
       }
       if (target === me || !online.has(target)) {
-        send(ws, { type: "error", targetId: target, message: "ID tidak ditemukan atau sedang offline" });
+        send(ws, { type: "error", code: "offline", targetId: target, message: "ID tidak ditemukan atau sedang offline" });
         return;
       }
       if (tooOld(ws)) {
-        send(ws, { type: "error", targetId: target, message: `TryDesk ${ws.ver} sudah terlalu lama. Perbarui ke versi terbaru di ${UPDATE_URL_TEXT} agar bisa terhubung lagi` });
+        send(ws, { type: "error", code: "too-old", targetId: target, message: say(ws,
+          `TryDesk ${ws.ver} sudah terlalu lama. Perbarui ke versi terbaru di ${UPDATE_URL_TEXT} agar bisa terhubung lagi`,
+          `TryDesk ${ws.ver} is too old. Update to the latest version at ${UPDATE_URL_TEXT} to connect again`) });
         return;
       }
       if (tooOld(online.get(target))) {
-        send(ws, { type: "error", targetId: target, message: `PC tujuan memakai TryDesk versi lama. Minta pemiliknya memperbarui di ${UPDATE_URL_TEXT}` });
+        send(ws, { type: "error", code: "peer-too-old", targetId: target, message: say(ws,
+          `PC tujuan memakai TryDesk versi lama. Minta pemiliknya memperbarui di ${UPDATE_URL_TEXT}`,
+          `The remote PC runs an old TryDesk. Ask its owner to update at ${UPDATE_URL_TEXT}`) });
         // The old PC is told too. targetId names the requester, a tab it has no session for, so nothing closes there.
-        sendTo(target, { type: "error", targetId: me, message: `Ada yang mencoba terhubung, tapi TryDesk di PC ini versi lama. Perbarui di ${UPDATE_URL_TEXT}` });
+        sendTo(target, { type: "error", code: "peer-too-old-host", targetId: me, message: say(online.get(target),
+          `Ada yang mencoba terhubung, tapi TryDesk di PC ini versi lama. Perbarui di ${UPDATE_URL_TEXT}`,
+          `Someone tried to connect, but this PC runs an old TryDesk. Update at ${UPDATE_URL_TEXT}`) });
         return;
       }
       // Block controlling your own PC. A second TryDesk instance on the same device shares the
@@ -277,7 +306,7 @@ function handle(ws, msg) {
       // instances have different IDs. Remoting it would cause an infinite screen loop / input bounce.
       const myOwner = owners.get(me);
       if (myOwner && myOwner === owners.get(target)) {
-        send(ws, { type: "error", targetId: target, message: "Tidak bisa me-remote PC Anda sendiri" });
+        send(ws, { type: "error", code: "self", targetId: target, message: "Tidak bisa me-remote PC Anda sendiri" });
         return;
       }
       // Clear stale state before the "busy" check so an abrupt drop never blocks a fresh request,
@@ -287,13 +316,15 @@ function handle(ws, msg) {
       for (const peer of peersOf(target)) { if (!online.has(peer) && !away.has(peer)) removePair(target, peer); }
       // A host is single-session: busy while someone (still around) is controlling it.
       if (isHostingBusy(target)) {
-        send(ws, { type: "error", targetId: target, message: "Remote desktop sedang dalam sesi lain" });
+        send(ws, { type: "error", code: "busy", targetId: target, message: "Remote desktop sedang dalam sesi lain" });
         return;
       }
       // Counted only for a request that would really pop up on the target (not a self or busy refusal).
       if (!incomingOk(target, ws.ip)) {
         note("ratelimit", { id: me, target });
-        send(ws, { type: "error", targetId: target, message: "PC tujuan sedang menerima terlalu banyak permintaan, coba lagi sebentar" });
+        send(ws, { type: "error", code: "target-ratelimit", targetId: target, message: say(ws,
+          "PC tujuan sedang menerima terlalu banyak permintaan, coba lagi sebentar",
+          "The remote PC is getting too many requests, try again in a moment") });
         return;
       }
       addPending(me, target);
@@ -367,7 +398,8 @@ function handle(ws, msg) {
     case "ice-candidate": {
       const peer = msg.targetId;
       if (!peer || !pairs.get(me) || !pairs.get(me).has(peer)) return;
-      sendTo(peer, { type: msg.type, fromId: me, offer: msg.offer, answer: msg.answer, candidate: msg.candidate });
+      // mac (1.3.3+): the sender's signature over its offer/answer under the password key; relayed, never checked here.
+      sendTo(peer, { type: msg.type, fromId: me, offer: msg.offer, answer: msg.answer, candidate: msg.candidate, ...(typeof msg.mac === "string" ? { mac: msg.mac.slice(0, 128) } : {}) });
       break;
     }
     case "disconnect":
@@ -434,6 +466,7 @@ wss.on("connection", (ws, req) => {
   const ip = clientIp(req);
   ws.ip = ip;
   ws.ua = String(req.headers["user-agent"] || "").slice(0, 300);
+  ws.sysId = /^\s*id\b/i.test(String(req.headers["accept-language"] || ""));   // system language Indonesian
   ipCounts.set(ip, (ipCounts.get(ip) || 0) + 1);
   if (ipCounts.get(ip) > MAX_CONN_PER_IP) {
     ipCounts.set(ip, ipCounts.get(ip) - 1);
@@ -473,7 +506,7 @@ wss.on("connection", (ws, req) => {
     for (const [req, targets] of pending) {
       if (targets.has(id)) {
         removePending(req, id);
-        sendTo(req, { type: "error", targetId: id, message: "Remote desktop offline" });
+        sendTo(req, { type: "error", code: "host-offline", targetId: id, message: "Remote desktop offline" });
       }
     }
     online.delete(id);

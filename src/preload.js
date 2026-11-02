@@ -7,6 +7,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
   isElevated: () => ipcRenderer.invoke("is-elevated"),
   relaunchAsAdmin: () => ipcRenderer.invoke("relaunch-as-admin"),
   onElevatedRelaunchBlocked: (cb) => ipcRenderer.on("elevated-relaunch-blocked", () => cb()),
+  // Windows service (unattended access)
+  serviceStatus: () => ipcRenderer.invoke("service-status"),
+  serviceInstall: (hash) => ipcRenderer.invoke("service-install", String(hash || "")),
+  serviceUninstall: () => ipcRenderer.invoke("service-uninstall"),
+  setServiceId: (id) => ipcRenderer.send("service-id", String(id || "")),
+  serviceAttachConsole: () => ipcRenderer.invoke("service-attach-console"),
+  serviceHideWindow: () => ipcRenderer.send("service-hide-window"),
+  serviceShowWindow: () => ipcRenderer.send("service-show-window"),
+  serviceUserIdentity: () => ipcRenderer.invoke("service-user-identity"),
+  serviceSetPassword: (hash) => ipcRenderer.invoke("service-set-password", String(hash || "")),
+  exportIdentity: (id, token) => ipcRenderer.send("export-identity", { id: String(id || ""), token: String(token || "") }),
   getMonitors: () => ipcRenderer.invoke("get-monitors"),
   // Settings that act on the OS
   getLoginItem: () => ipcRenderer.invoke("get-login-item"),
@@ -18,12 +29,26 @@ contextBridge.exposeInMainWorld("electronAPI", {
   openExternal: (url) => ipcRenderer.send("open-external", String(url || "")),
   setDiscordEnabled: (on) => ipcRenderer.send("set-discord-enabled", !!on),
   setHostingState: (on) => ipcRenderer.send("hosting-state", !!on),
-  onPrivacyReleased: (cb) => ipcRenderer.on("privacy-released", () => cb()),
+  onPrivacyReleased: (cb) => ipcRenderer.on("privacy-released", (_e, why) => cb(why === "failed" ? "failed" : "")),
   setDisplayMediaSource: (id, displayId) => ipcRenderer.invoke("set-dm-source", id, displayId),
+  // Fast capture path (Windows host): native capture + GPU encode in a helper process; H.264 frames come back here.
+  fastCaptureAvailable: () => ipcRenderer.invoke("fast-capture-available"),
+  fastCaptureStart: (opts) => ipcRenderer.invoke("fast-capture-start", { displayId: String(opts?.displayId || ""), fps: Number(opts?.fps) || 60, mbps: Number(opts?.mbps) || 50, udp: opts?.udp ? String(opts.udp) : "" }),
+  fastCaptureCmd: (cmd) => ipcRenderer.send("fast-capture-cmd", { cmd: String(cmd?.cmd || ""), mbps: Number(cmd?.mbps) || 0, fps: Number(cmd?.fps) || 0, ip: String(cmd?.ip || ""), port: Number(cmd?.port) || 0, on: !!cmd?.on }),
+  fastCaptureStop: () => ipcRenderer.send("fast-capture-stop"),
+  onFastCapturePacket: (cb) => ipcRenderer.on("fast-capture-packet", (_e, p) => cb(p)),
+  onFastCaptureInfo: (cb) => ipcRenderer.on("fast-capture-info", (_e, s) => cb(String(s))),
+  onFastCaptureEnded: (cb) => ipcRenderer.on("fast-capture-ended", (_e, d) => cb(d)),
+  // Viewer end of the fast path's UDP link (Windows): frames arrive whole from the receiver helper.
+  fastUdpRecvStart: (opts) => ipcRenderer.invoke("fast-udp-recv-start", { key: String(opts?.key || ""), port: Number(opts?.port) || 0, ips: Array.isArray(opts?.ips) ? opts.ips.map(String).slice(0, 8) : [] }),
+  fastUdpRecvStop: () => ipcRenderer.send("fast-udp-recv-stop"),
+  onFastUdpPacket: (cb) => ipcRenderer.on("fast-udp-packet", (_e, p) => cb(p)),
+  onFastUdpInfo: (cb) => ipcRenderer.on("fast-udp-info", (_e, s) => cb(String(s))),
+  onFastUdpEnded: (cb) => ipcRenderer.on("fast-udp-ended", (_e, d) => cb(d)),
   setCaptureDisplay: (d) => ipcRenderer.send("set-capture-display", d),
   executeInput: (event) => ipcRenderer.send("execute-input", event),
   releaseRemoteInput: () => ipcRenderer.send("release-remote-input"),
-  focusWindow: () => ipcRenderer.send("focus-window"),
+  focusWindow: (pin) => ipcRenderer.send("focus-window", typeof pin === "boolean" ? pin : null),
   minimizeWindow: () => ipcRenderer.send("minimize-window"),
   maximizeWindow: () => ipcRenderer.send("maximize-window"),
   closeWindow: () => ipcRenderer.send("close-window"),
@@ -50,7 +75,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
   fsHome: () => ipcRenderer.invoke("fs-home"),
   fsList: (p) => ipcRenderer.invoke("fs-list", p),
 
-  onDisplayChanged: (cb) => ipcRenderer.on("display-changed", () => cb()),
+  onDisplayChanged: (cb) => ipcRenderer.on("display-changed", (_e, force) => cb(!!force)),
   onHostCursorHidden: (cb) => ipcRenderer.on("host-cursor-hidden", (_e, hidden) => cb(hidden)),
   requestCursorState: () => ipcRenderer.send("request-cursor-state"),
   // An admin window (Task Manager, admin CMD) in front of a non-elevated host: input to it is blocked by Windows.
@@ -83,6 +108,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 
   enableBlackScreen: () => ipcRenderer.invoke("enable-black-screen"),
   disableBlackScreen: () => ipcRenderer.invoke("disable-black-screen"),
+  panicKeyYield: (yieldIt) => ipcRenderer.send("panic-key-yield", !!yieldIt),
   enableInputLock: () => ipcRenderer.invoke("enable-input-lock"),
   disableInputLock: () => ipcRenderer.invoke("disable-input-lock"),
 });

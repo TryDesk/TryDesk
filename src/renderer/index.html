@@ -132,6 +132,14 @@
             </div>
           </div>
           <div class="setting-group">
+            <label>Efek suara</label>
+            <div class="setting-row-toggle">
+              <span>Suara klik di tombol utama</span>
+              <label class="switch"><input type="checkbox" id="setting-ui-sound" checked><span class="switch-slider"></span></label>
+            </div>
+            <div class="setting-note">Pelan, dan otomatis diam selama sesi remote berjalan.</div>
+          </div>
+          <div class="setting-group">
             <label>Discord</label>
             <div class="setting-row-toggle">
               <span>Tampilkan status TryDesk di profil Discord</span>
@@ -242,6 +250,13 @@
             <div class="setting-note pw-state" id="access-pw-state"></div>
             <div class="setting-note">Jika diset, orang yang mengontrol PC ini cukup mengetik password ini di kolom Password pada TryDesk mereka (atau saat diminta) — mereka langsung masuk tanpa Anda klik Terima. Tanpa password, Anda tetap diminta Terima.</div>
           </div>
+          <div class="setting-group" id="service-group" style="display:none">
+            <label>Layanan Windows (akses tanpa pengawasan)</label>
+            <div class="setting-note pw-state" id="service-state"></div>
+            <div class="setting-note">Dengan layanan, PC ini tetap bisa dikontrol setelah restart dan saat sesi RDP diputus (jendela RDP ditutup), seperti AnyDesk. ID PC ini tidak berubah. Tanpa password akses, setiap koneksi tetap meminta Terima. Versi Setup memasangnya otomatis.</div>
+            <button class="btn-apply" id="btn-service-install" style="margin-top:10px">Pasang layanan</button>
+            <button class="btn-setting-danger hidden" id="btn-service-remove" style="margin-top:8px">Hapus layanan</button>
+          </div>
           <div class="setting-group">
             <label>Izin akses</label>
             <div class="setting-row-toggle">
@@ -299,7 +314,7 @@
               <option value="kualitas">Kualitas (60 Mbps / 60 FPS)</option>
               <option value="ultra">Ultra (150 Mbps / 120 FPS)</option>
               <option value="gaming">Gaming (300 Mbps / 165 FPS)</option>
-              <option value="maksimal">Maksimal (500 Mbps / 240 FPS)</option>
+              <option value="maksimal">Maksimal (1000 Mbps / 240 FPS)</option>
               <option value="custom" hidden>Kustom (diatur di panel Kualitas)</option>
             </select>
             <div class="setting-note">Dipakai untuk tab remote baru. FPS di atas 120 butuh monitor host dengan refresh rate setinggi itu.</div>
@@ -578,16 +593,20 @@
       <!-- Shown when the host has an access password and asks again (none typed, or a wrong one). The host's
            Accept dialog is open at the same time: whichever comes first — the password or a click — wins. -->
       <!-- While it is open the screen shows only this form (style.css hides the ring and the steps). -->
+      <!-- Layout: the PC being opened (same preview + name + ID as its Recent tile), then one field and one button. -->
       <form class="connect-pw hidden" id="connect-pw" autocomplete="off">
-        <h2 class="cpw-title">Password akses</h2>
-        <p class="cpw-peer" id="connect-pw-peer"></p>
-        <label class="cpw-label" for="connect-pw-input">Password</label>
-        <div class="connect-pw-row">
-          <input type="password" id="connect-pw-input" class="input-field" autocomplete="off">
-          <button type="submit" class="btn-pw" id="connect-pw-go">Masuk</button>
+        <div class="cpw-peer">
+          <div class="tile-preview" id="connect-pw-thumb" aria-hidden="true"></div>
+          <div class="cpw-peer-text">
+            <span class="cpw-peer-name" id="connect-pw-name"></span>
+            <span class="cpw-peer-id" id="connect-pw-peer"></span>
+          </div>
         </div>
+        <label class="cpw-title" for="connect-pw-input">Masukkan password</label>
+        <input type="password" id="connect-pw-input" class="input-field" autocomplete="off">
         <p class="connect-pw-msg" id="connect-pw-msg" role="status"></p>
-        <p class="cpw-wait" id="connect-pw-wait"><span class="cpw-spin" aria-hidden="true"></span><span id="connect-pw-wait-text"></span></p>
+        <button type="submit" class="btn-connect cpw-go" id="connect-pw-go">Masuk</button>
+        <p class="cpw-wait" id="connect-pw-wait"><span id="connect-pw-wait-text"></span></p>
       </form>
       <button class="btn-cancel" id="btn-cancel-connect">Batalkan</button>
     </div>
@@ -738,7 +757,7 @@
                 <span>Mbps</span>
               </div>
             </div>
-            <div class="setting-note">Geser 1–1000 Mbps. Nilai tinggi = gambar lebih tajam, butuh bandwidth besar.</div>
+            <div class="setting-note">Geser 1–1000 Mbps. Nilai tinggi = gambar lebih tajam, butuh bandwidth besar. Di atas 300 Mbps hanya lewat jalur cepat UDP (Windows ke Windows, jaringan lokal).</div>
           </div>
 
           <div class="qp-group">

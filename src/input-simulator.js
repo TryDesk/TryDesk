@@ -1,4 +1,4 @@
-let SetCursorPos, mouse_event, keybd_event, MapVirtualKeyW, _SetWindowDisplayAffinity, _BlockInput, GetCursorInfo, _LockWorkStation;
+let SetCursorPos, mouse_event, keybd_event, MapVirtualKeyW, _SetWindowDisplayAffinity, _SetWindowPos, _BlockInput, GetCursorInfo, _LockWorkStation;
 let _SendInput;      // KEYEVENTF_UNICODE text (phone keyboards send characters, not key codes)
 let IsUserAnAdmin;   // shell32 — true when the host process is elevated (can inject input into admin/UAC windows)
 let _fg;             // user32/kernel32/advapi32 calls for isForegroundElevated()
@@ -30,6 +30,7 @@ function init() {
     keybd_event = user32.func("void keybd_event(uint8_t bVk, uint8_t bScan, uint32_t dwFlags, uintptr_t dwExtraInfo)");
     MapVirtualKeyW = user32.func("uint32_t MapVirtualKeyW(uint32_t uCode, uint32_t uMapType)");
     _SetWindowDisplayAffinity = user32.func("bool SetWindowDisplayAffinity(uintptr_t hWnd, uint32_t dwAffinity)");
+    try { _SetWindowPos = user32.func("bool SetWindowPos(uintptr_t hWnd, intptr_t hWndInsertAfter, int X, int Y, int cx, int cy, uint32_t uFlags)"); } catch {}
     // Win32 BlockInput takes a BOOL (4-byte int); binding as `int` avoids a width mismatch
     // that could leave input permanently blocked when unblocking.
     _BlockInput = user32.func("int BlockInput(int fBlockIt)");
@@ -161,6 +162,14 @@ function setWindowDisplayAffinity(hwnd, affinity) {
   return false;
 }
 
+// Back to the top of the always-on-top band without moving, resizing or focusing it (HWND_TOPMOST with
+// SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE). Electron's moveTop() passes a size along, which on a scaled
+// display can come out wrong.
+function raiseTopmost(hwnd) {
+  if (_SetWindowPos) { try { return !!_SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x0013); } catch {} }
+  return false;
+}
+
 function blockInput(block) {
   if (_BlockInput) { try { return _BlockInput(block ? 1 : 0); } catch { return false; } }
   return false;
@@ -273,4 +282,4 @@ function isForegroundElevated() {
 }
 // "Lock Windows after the session ends" — the same as Win+L.
 function lockWorkStation() { try { return _LockWorkStation ? !!_LockWorkStation() : false; } catch { return false; } }
-module.exports = { init, moveMouse, moveMouseRelative, mouseDown, mouseUp, mouseScroll, keyDown, keyUp, typeText, releaseAll, lockWorkStation, setWindowDisplayAffinity, blockInput, isCursorHidden, startKeyHook, stopKeyHook, startMouseHook, stopMouseHook, setMouseCenter, isElevated, isForegroundElevated };
+module.exports = { init, moveMouse, moveMouseRelative, mouseDown, mouseUp, mouseScroll, keyDown, keyUp, typeText, releaseAll, lockWorkStation, setWindowDisplayAffinity, raiseTopmost, blockInput, isCursorHidden, startKeyHook, stopKeyHook, startMouseHook, stopMouseHook, setMouseCenter, isElevated, isForegroundElevated };

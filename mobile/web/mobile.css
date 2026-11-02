@@ -46,12 +46,12 @@ html.td-mobile .m-tab:active { transform: scale(0.97); }
 /* Home shows one card per tab; everything scrolls clear of the bar. */
 html.td-mobile[data-mtab="connect"] .hcard-sessions { display: none; }
 html.td-mobile[data-mtab="devices"] .home-top { display: none; }
-html.td-mobile .home { padding-bottom: calc(96px + var(--sab)); }
 
 /* ─── Home: one column, connect first ─── */
 /* The phone is a viewer: no "Desktop Ini" card. The connect card leads (its own heading replaces the card head),
-   the sessions card follows with full-width tabs and search. */
-html.td-mobile .home { padding: 16px 14px; gap: 14px; }
+   the sessions card follows with full-width tabs and search. The bottom padding keeps the last tiles clear of the
+   floating tab bar (it used to sit in a separate rule that this shorthand overrode: tiles went under the bar). */
+html.td-mobile .home { padding: 16px 14px calc(96px + var(--sab)); gap: 14px; }
 html.td-mobile .home-top { grid-template-columns: 1fr; gap: 14px; }
 html.td-mobile .panel-left { display: none; }
 html.td-mobile .hcard-remote > .hcard-head { display: none; }
@@ -64,9 +64,16 @@ html.td-mobile .sess-tab { flex: 1; justify-content: center; height: 38px; font-
 html.td-mobile .recent-head-actions { width: 100%; margin-left: 0; flex-wrap: wrap; justify-content: space-between; row-gap: 8px; }
 html.td-mobile .sess-search { flex: 1 1 100%; }
 html.td-mobile .sess-search input { width: 100%; height: 38px; font-size: 16px; }
-html.td-mobile .view-toggle { display: none; }
+/* Same grid / list switch as on the desktop, sized for a thumb, on one row with sort; "Hapus semua" at the end. */
+html.td-mobile .recent-head-actions { justify-content: flex-start; column-gap: 8px; }
+html.td-mobile .view-btn { width: 44px; height: 36px; }
+html.td-mobile .recent-clear { margin-left: auto; }
 html.td-mobile .recent-sort, html.td-mobile .recent-clear { height: 38px; }
 html.td-mobile .hcard-sessions .recent-section { padding: 12px; }
+/* Devices tab: the list is the page itself. A card around the tiles (which are cards too) was a box in a box. */
+html.td-mobile[data-mtab="devices"] .hcard-sessions { background: transparent; border: 0; border-radius: 0; }
+html.td-mobile[data-mtab="devices"] .sess-head { padding: 0 0 12px; }
+html.td-mobile[data-mtab="devices"] .hcard-sessions .recent-section { padding: 12px 0 0; }
 html.td-mobile .help-panel { width: 100%; max-width: none; max-height: none; height: 100%; border: 0; border-radius: 0; padding-top: var(--sat); }
 html.td-mobile #overlay-lan-help { align-items: stretch; background: var(--bg-primary); backdrop-filter: none; padding: 0; }
 html.td-mobile .help-body li, html.td-mobile .help-body p { font-size: 14.5px; }
@@ -79,10 +86,17 @@ html.td-mobile .input-id { font-size: 24px; padding: 16px; letter-spacing: 3px; 
 html.td-mobile .btn-connect { padding: 16px; border-radius: 13px; font-size: 16px; }
 html.td-mobile .btn-connect:hover { transform: none; box-shadow: none; }
 html.td-mobile .m-foot { font-size: 12.5px; line-height: 1.5; color: var(--text-muted); margin-top: 6px; }
-html.td-mobile .m-ver { margin-top: 2px; font-variant-numeric: tabular-nums; }
-html.td-mobile .recent-grid { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
+html.td-mobile .recent-grid:not(.view-list) { grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); }
 html.td-mobile .recent-head { flex-wrap: wrap; row-gap: 8px; }
-html.td-mobile .fav-star.tile-star { opacity: 1; width: 32px; height: 32px; }
+/* As on the desktop, the star on a grid tile only shows for a favorite (a star on every tile was clutter); the
+   tile's ⋮ menu adds and removes favorites. In the list it stays visible, a tap target in the row. */
+html.td-mobile .fav-star.tile-star { width: 32px; height: 32px; }
+html.td-mobile .recent-grid:not(.view-list) .recent-tile:hover .fav-star.tile-star:not(.active) { opacity: 0; }   /* a tap leaves :hover stuck */
+html.td-mobile .view-list .recent-tile { min-height: 58px; padding: 8px 6px 8px 10px; }
+html.td-mobile .view-list .tile-preview { width: 64px; height: 38px; }
+html.td-mobile .view-list .tile-meta { flex-direction: column; align-items: flex-start; gap: 2px; }
+html.td-mobile .view-list .tile-id { font-size: 15px; }
+html.td-mobile .view-list .tile-sub { font-size: 12px; }
 html.td-mobile .tile-more { width: 36px; height: 36px; color: var(--text-secondary); }
 html.td-mobile .recent-tile { -webkit-touch-callout: none; user-select: none; }
 html.td-mobile .recent-tile:hover { transform: none; box-shadow: none; border-color: var(--border); background: var(--bg-secondary); }
@@ -100,6 +114,9 @@ html.td-mobile #overlay-settings { align-items: stretch; justify-content: stretc
 html.td-mobile .settings-panel { width: 100%; max-width: none; max-height: none; height: 100%; border: 0; border-radius: 0; box-shadow: none; animation: none; }
 html.td-mobile .settings-header { padding-top: 14px; padding-bottom: 14px; }
 html.td-mobile .settings-body { padding: 0 18px calc(100px + var(--sab)); }   /* clear of the floating tab bar */
+/* The LAN help shares the .settings-body class but has no tab bar under it (mobile.js hides the bar), so it gets its
+   own spacing: room above the text, and the "Mengerti" button just clear of the gesture bar. */
+html.td-mobile .help-body { padding: 16px 18px calc(20px + var(--sab)); }
 html.td-mobile .settings-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -18px 18px; padding: 12px 18px; }
 html.td-mobile .settings-tabs::-webkit-scrollbar { display: none; }
 html.td-mobile .stab { flex: 1 0 auto; padding: 10px 6px; font-size: 13.5px; }   /* the five tabs fit one row, in English too */
@@ -110,6 +127,15 @@ html.td-mobile .setting-row-toggle { gap: 14px; }
 /* ─── Connecting ─── */
 html.td-mobile .connecting-container { padding: 28px 22px; text-align: center; }
 html.td-mobile .btn-cancel { padding: 13px 30px; font-size: 15px; }
+/* Password: a page, not a floating card. It starts at the top, so the keyboard never covers the field or the
+   button, and the button is full width for the thumb. */
+html.td-mobile .connecting-container:has(.connect-pw:not(.hidden)) { justify-content: flex-start; padding: 20px 16px; gap: 6px; }
+html.td-mobile .connect-pw { max-width: none; padding: 4px 2px 0; background: none; border: 0; border-radius: 0; }
+html.td-mobile .cpw-peer .tile-preview { width: 88px; height: 50px; }
+html.td-mobile .cpw-peer-name { font-size: 17px; }
+html.td-mobile .cpw-peer-id { font-size: 13.5px; }
+html.td-mobile .cpw-title { font-size: 15px; }
+html.td-mobile .connecting-container .cpw-wait { font-size: 13.5px; }
 
 /* ─── Remote: the picture takes the whole screen; controls float on top ─── */
 html.td-mobile .remote-tabs { display: none; }
@@ -188,6 +214,10 @@ html.td-mobile .control-center, html.td-mobile .cc-flyout, html.td-mobile .key-m
   transform-origin: bottom center; animation: m-sheet 0.18s var(--ease); }
 html.td-mobile .cc-flyout { z-index: 62; }
 @keyframes m-sheet { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  html.td-mobile .control-center, html.td-mobile .cc-flyout, html.td-mobile .key-menu, html.td-mobile .tile-menu { animation: none; }
+  html.td-mobile .m-tab:active { transform: none; }
+}
 html.td-mobile .cc-cat, html.td-mobile .cc-leaf, html.td-mobile .key-menu button { padding: 13px 14px; font-size: 14.5px; }
 html.td-mobile .cc-leaf.m-back { color: var(--text-secondary); font-weight: 600; border-bottom: 1px solid var(--border); border-radius: 8px 8px 0 0; margin-bottom: 4px; }
 html.td-mobile .cc-flyout-slider { padding: 12px 14px; }
@@ -197,6 +227,12 @@ html.td-mobile .cc-flyout-slider input[type="range"] { height: 28px; }
 html.td-mobile .quality-panel { width: 100%; border-left: 0; z-index: 50; }
 html.td-mobile .chat-panel { width: 100%; border-right: 0; padding: var(--sat) var(--sar) 0 var(--sal); }
 html.td-mobile .chat-input-row { padding-bottom: calc(12px + var(--sab)); }
+
+/* Recording badge: below the status bar / notch, clear of the stats box on the left */
+html.td-mobile #rec-indicator { top: calc(10px + var(--sat)); right: calc(12px + var(--sar)); }
+
+/* "Kembali ke sesi" on Home sits above the floating tab bar */
+html.td-mobile .back-pill { bottom: calc(92px + var(--sab)); }
 
 /* Toasts sit above the toolbar */
 html.td-mobile .toast { bottom: calc(80px + var(--sab)); max-width: calc(100vw - 28px); text-align: center; line-height: 1.45; }

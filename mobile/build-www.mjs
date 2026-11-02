@@ -19,6 +19,9 @@ const copy = (from, to) => fs.copyFileSync(path.join(root, from), path.join(out,
 copy("src/renderer/app.js", "app.js");
 copy("src/config.json", "config.json");
 for (const f of fs.readdirSync(path.join(root, "assets/fonts"))) copy(`assets/fonts/${f}`, `fonts/${f}`);
+// Button sounds: app.js loads them from "sfx/" when window.TD_MOBILE is set (version.js, below).
+fs.mkdirSync(path.join(out, "sfx"), { recursive: true });
+for (const f of fs.readdirSync(path.join(root, "assets/sfx"))) copy(`assets/sfx/${f}`, `sfx/${f}`);
 for (const f of ["mobile-shim.js", "mobile.js", "mobile.css"]) fs.copyFileSync(path.join(here, "web", f), path.join(out, f));
 fs.writeFileSync(path.join(out, "version.js"), `window.TD_MOBILE = { version: ${JSON.stringify(pkg.version)}, platform: "android" };\n`);
 

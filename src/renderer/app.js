@@ -27,6 +27,29 @@ let scaleMode = "fit";            // view scale of the ACTIVE tab (kept in sync 
 
 const CHUNK = 64 * 1024;
 const BUFFER_HIGH = 8 * 1024 * 1024;
+// File data goes out paced, through a small queue. Filling an 8 MB queue as fast as possible made a rented PC's
+// network drop the burst and the transfer collapsed to ~0.7 Mbps (twice, two machines); paced at 30 Mbps the
+// same 20 MB took 5.6 s (2026-11-02). The rate adapts every 500 ms on what actually LEFT this PC: up while the
+// link keeps up with it, down to what left when it clearly can't.
+const FILE_QUEUE = 256 * 1024;
+function filePacer(ch) {
+  let rate = 30e6 / 8, nextAt = 0, winT = performance.now(), winSent = 0, winBuf = ch.bufferedAmount;
+  return async (chunk) => {
+    while (ch.bufferedAmount > FILE_QUEUE) await sleep(5);
+    const now = performance.now();
+    if (now - winT >= 500) {
+      const leftRate = (winSent - (ch.bufferedAmount - winBuf)) / ((now - winT) / 1000);
+      if (leftRate >= rate * 0.85) rate = Math.min(rate * 1.25, 800e6 / 8);
+      else if (leftRate < rate * 0.6) rate = Math.max(leftRate * 1.1, 2e6 / 8);
+      winT = now; winSent = 0; winBuf = ch.bufferedAmount;
+    }
+    if (nextAt > now) await sleep(nextAt - now);
+    ch.send(chunk);
+    const n = chunk.byteLength || chunk.length;
+    winSent += n;
+    nextAt = Math.max(nextAt, performance.now()) + (n / rate) * 1000;
+  };
+}
 
 // Quality template — a new viewer tab clones this; editing quality in a tab updates that live
 // tab and persists here as the default for the next tab.
@@ -111,8 +134,15 @@ const PRESETS = {
   kualitas: { bitrate: 60,  fps: 60, resHeight: 0 },
   ultra:    { bitrate: 150, fps: 120, resHeight: 0 },
   gaming:   { bitrate: 300, fps: 165, resHeight: 0 },
-  maksimal: { bitrate: 500, fps: 240, resHeight: 0 },
+  maksimal: { bitrate: 1000, fps: 240, resHeight: 0 },
 };
+// The highest bitrate a session may ask for (slider, presets, what the host accepts). Only the fast path's own UDP
+// link (Windows to Windows on a LAN, see trydesk-udp.h) can carry it: Chromium's paths are capped below.
+const BITRATE_MAX_MBPS = 1000;
+// What goes through Chromium stays at 300: its WebRTC video collapsed to ~1 fps above ~350 Mbps (bench run5,
+// 2026-11-02) and its data channel tops out near 335 Mbps on one PC. The SDP ceiling and the fast path over the
+// data channel use this; a higher slider value simply waits for the UDP link.
+const WEBRTC_MAX_MBPS = 300;
 
 const $ = (sel) => document.querySelector(sel);
 const $$ = (sel) => [...document.querySelectorAll(sel)];
@@ -248,6 +278,8 @@ function applyLanguage(l) {
   try { if (typeof renderUpdateBar === "function") renderUpdateBar(); } catch {}
   // Main process shows its own text (error dialogs, black-screen overlay, Discord presence) — keep it in step.
   try { window.electronAPI.setUiLanguage && window.electronAPI.setUiLanguage(lang); } catch {}
+  // The server writes some messages itself (update required, too many requests): it answers in this language.
+  try { if (typeof sendSignal === "function") sendSignal({ type: "lang", lang }); } catch {}
 }
 
 // App-wide translation via a text map: the UI is authored in Indonesian, and every text node, placeholder,
@@ -263,6 +295,8 @@ const TEXT_EN = {
   "Bahasa antarmuka": "Interface language", "Notifikasi": "Notifications",
   "Tampilkan notifikasi koneksi masuk": "Show incoming connection notifications",
   "Suara notifikasi": "Notification sound", "Pembaruan otomatis": "Automatic updates",
+  "Efek suara": "Sound effects", "Suara klik di tombol utama": "Click sound on the main buttons",
+  "Pelan, dan otomatis diam selama sesi remote berjalan.": "Quiet, and silent by itself while a remote session is running.",
   "Periksa pembaruan saat aplikasi dimulai": "Check for updates on startup",
   // Connection
   "Waktu tunggu koneksi": "Connection timeout",
@@ -302,6 +336,7 @@ const TEXT_EN = {
   "Satu jaringan? Sambung lewat IP": "Same network? Connect by IP",
   "Cari ID atau nama": "Search ID or name", "Tidak ada yang cocok dengan pencarian.": "Nothing matches your search.",
   "Belum ada favorit. Klik bintang pada sebuah perangkat untuk menyimpannya di sini.": "No favorites yet. Click the star on a device to keep it here.",
+  "Belum ada favorit. Ketuk ⋮ pada sebuah perangkat, lalu pilih Tambah ke favorit.": "No favorites yet. Tap ⋮ on a device, then choose Add to favorites.",
   "Belum ada koneksi. Perangkat yang pernah Anda hubungi muncul di sini.": "No connections yet. Devices you connect to show up here.",
   "Sambung lewat IP (LAN)": "Connect by IP (LAN)", "Buka pengaturan LAN": "Open LAN settings", "Mengerti": "Got it",
   "Cara pakai dan kalau gagal tersambung": "How to use it, and what to do if it fails", "Alamat IP disalin": "IP address copied",
@@ -323,6 +358,20 @@ const TEXT_EN = {
   "Kontrol penuh (administrator)": "Full control (administrator)",
   "Jendela admin (mis. CMD sebagai administrator) hanya bisa dikontrol dari jarak jauh bila TryDesk dijalankan sebagai administrator. Tanpa ini layar tetap terlihat, tapi klik & ketik tidak berfungsi di jendela admin. Dialog UAC tampil di desktop aman Windows dan tidak bisa dilihat atau dikontrol dari jarak jauh.": "Admin windows (e.g. CMD run as administrator) can only be controlled remotely when TryDesk runs as administrator. Without it the screen still shows, but clicks & keystrokes won't work on admin windows. UAC prompts appear on Windows' secure desktop and can't be seen or controlled remotely.",
   "Jalankan sebagai administrator": "Run as administrator",
+  "Layanan Windows (akses tanpa pengawasan)": "Windows service (unattended access)",
+  "Dengan layanan, PC ini tetap bisa dikontrol setelah restart dan saat sesi RDP diputus (jendela RDP ditutup), seperti AnyDesk. ID PC ini tidak berubah. Tanpa password akses, setiap koneksi tetap meminta Terima. Versi Setup memasangnya otomatis.": "With the service, this PC stays controllable after a restart and while the RDP session is disconnected (RDP window closed), like AnyDesk. This PC's ID doesn't change. Without an access password, every connection still asks for Accept. The Setup version installs it automatically.",
+  "Pasang layanan": "Install service", "Hapus layanan": "Remove service",
+  "Layanan terpasang. ID PC ini tetap sama.": "Service installed. This PC's ID stays the same.",
+  "UAC dibatalkan — password layanan tidak berubah": "UAC cancelled — the service's password didn't change", "Password layanan gagal diubah": "The service's password couldn't be changed",
+  "PC ini memakai layanan TryDesk": "This PC uses the TryDesk service",
+  "Layanan belum terpasang.": "Service not installed.",
+  "Isi password akses dulu (minimal satu kali disimpan), lalu pasang layanan.": "Set an access password first, then install the service.",
+  "Memasang layanan… setujui prompt UAC.": "Installing the service… approve the UAC prompt.",
+  "Layanan terpasang. ID layanan muncul dalam beberapa detik.": "Service installed. Its ID appears in a few seconds.",
+  "UAC dibatalkan — layanan tidak dipasang": "UAC cancelled — service not installed",
+  "UAC dibatalkan — layanan tetap terpasang": "UAC cancelled — service still installed",
+  "Layanan dihapus": "Service removed",
+  "Layanan gagal dipasang": "Service could not be installed", "Layanan gagal dihapus": "Service could not be removed",
   "Password akses tanpa konfirmasi": "Access password (no confirmation)",
   "Jika diset, remote yang memasukkan password ini bisa langsung terhubung tanpa klik Accept.": "If set, a remote entering this password can connect directly without clicking Accept.",
   "Izin akses": "Access permissions", "Izinkan kontrol keyboard & mouse": "Allow keyboard & mouse control",
@@ -341,7 +390,7 @@ const TEXT_EN = {
   "Kualitas bawaan": "Default quality",
   "Hemat (3 Mbps / 15 FPS)": "Saver (3 Mbps / 15 FPS)", "Seimbang (20 Mbps / 30 FPS)": "Balanced (20 Mbps / 30 FPS)",
   "Kualitas (60 Mbps / 60 FPS)": "Quality (60 Mbps / 60 FPS)", "Ultra (150 Mbps / 120 FPS)": "Ultra (150 Mbps / 120 FPS)",
-  "Gaming (300 Mbps / 165 FPS)": "Gaming (300 Mbps / 165 FPS)", "Maksimal (500 Mbps / 240 FPS)": "Maximum (500 Mbps / 240 FPS)",
+  "Gaming (300 Mbps / 165 FPS)": "Gaming (300 Mbps / 165 FPS)", "Maksimal (1000 Mbps / 240 FPS)": "Maximum (1000 Mbps / 240 FPS)",
   "Codec video bawaan": "Default video codec", "Otomatis": "Automatic",
   "AV1 (paling hemat bandwidth)": "AV1 (most bandwidth-efficient)", "VP9 (keseimbangan)": "VP9 (balanced)",
   "VP8 (kompatibilitas tinggi)": "VP8 (high compatibility)", "H.264 (akselerasi hardware)": "H.264 (hardware acceleration)",
@@ -396,8 +445,9 @@ const TEXT_EN = {
   "Masih ada sesi remote yang terbuka.": "There are still remote sessions open.",
   "Menutup TryDesk memutus semua sesi, dan PC ini tidak bisa dihubungi sampai TryDesk dibuka lagi.": "Closing TryDesk ends every session, and this PC can't be reached until TryDesk is opened again.",
   "Kembali ke sesi": "Back to session",
-  "Atau tunggu pemilik PC menekan Terima. TryDesk tidak menyimpan password, jadi ketik setiap kali menyambung.": "Or wait for the PC's owner to click Accept. TryDesk doesn't save passwords, so type it each time you connect.",
-  "Lewat IP, hanya password yang bisa membuka akses. TryDesk tidak menyimpan password.": "Over IP, only the password opens access. TryDesk doesn't save passwords.",
+  "Atau tunggu pemilik PC menekan Terima. Password tidak disimpan.": "Or wait for the PC's owner to click Accept. The password isn't saved.",
+  "Lewat IP, hanya password yang bisa membuka akses. Password tidak disimpan.": "Over IP, only the password opens access. The password isn't saved.",
+  "Masukkan password": "Enter password", "ID TryDesk": "TryDesk ID", "Jaringan lokal": "Local network",
   "Menunggu password atau persetujuan pemilik PC": "Waiting for the password or the owner's approval", "Memeriksa password…": "Checking password…",
   "Peminta tidak memasukkan password akses. Ia masih bisa mengetiknya — bila benar, koneksi langsung diterima.": "The requester did not enter the access password. They can still type it — if it is right, the connection is accepted at once.",
   "Peminta tidak memasukkan password akses.": "The requester did not enter the access password.",
@@ -458,6 +508,7 @@ const TEXT_EN = {
   "Layar gelap dilepas oleh pengguna di PC remote": "Black screen released by the user on the remote PC",
   "Terima": "Accept", "Tolak": "Reject",
   // Connection results (shown locally, sent by the host, or sent by the signaling server)
+  "PC ini hanya menerima koneksi dengan password akses": "This PC only accepts connections with its access password",
   "Koneksi ditolak": "Connection rejected", "Remote desktop memutus koneksi": "The remote desktop ended the connection",
   "Belum terhubung ke server": "Not connected to the server yet", "Masukkan ID 9 digit": "Enter a 9-digit ID",
   "Tidak bisa konek ke diri sendiri": "You can't connect to yourself", "Tab untuk ID ini sudah terbuka": "A tab for this ID is already open",
@@ -471,6 +522,11 @@ const TEXT_EN = {
   "Remote desktop sedang dalam sesi lain": "The remote desktop is in another session",
   "Tidak bisa me-remote PC Anda sendiri": "You can't remote into your own PC",
   "Terlalu banyak permintaan, coba lagi sebentar": "Too many requests, try again shortly", "Remote desktop offline": "Remote desktop offline",
+  "TryDesk di PC ini sudah terlalu lama dan tidak bisa terhubung lagi. Perbarui di trydesk.ai.id/downloads": "TryDesk on this PC is too old and can no longer connect. Update at trydesk.ai.id/downloads",
+  "PC tujuan memakai TryDesk versi lama. Minta pemiliknya memperbarui di trydesk.ai.id/downloads": "The remote PC runs an old TryDesk. Ask its owner to update at trydesk.ai.id/downloads",
+  "Ada yang mencoba terhubung, tapi TryDesk di PC ini versi lama. Perbarui di trydesk.ai.id/downloads": "Someone tried to connect, but this PC runs an old TryDesk. Update at trydesk.ai.id/downloads",
+  "Server menolak permintaan ini": "The server refused this request",
+  "PC tujuan sedang menerima terlalu banyak permintaan, coba lagi sebentar": "The remote PC is getting too many requests, try again in a moment",
   "Tip: agar jendela admin bisa dikontrol, jalankan TryDesk sebagai administrator (Pengaturan → Keamanan)": "Tip: to control admin windows, run TryDesk as administrator (Settings → Security)",
   "Jendela administrator aktif: pengontrol tidak bisa klik atau mengetik di jendela ini. Jalankan TryDesk sebagai administrator (Pengaturan → Keamanan) agar bisa.": "An administrator window is open: the person controlling this PC can't click or type in it. Run TryDesk as administrator (Settings → Security) to allow it.",
   "Jendela administrator (mis. Task Manager) terbuka di PC remote. Windows memblokir klik, ketikan, dan kursor ke jendela itu. Minta pemilik PC menutupnya, atau menjalankan TryDesk sebagai administrator.": "An administrator window (e.g. Task Manager) is open on the remote PC. Windows blocks clicks, typing and the cursor in that window. Ask the PC's owner to close it, or to run TryDesk as administrator.",
@@ -493,7 +549,7 @@ const TEXT_EN = {
   "Resolusi": "Resolution", "Jalur": "Route", "P2P langsung": "Direct P2P", "P2P lokal": "Local P2P",
   "Pengaturan Kualitas": "Quality Settings", "Hemat": "Saver", "Seimbang": "Balanced", "Kualitas": "Quality", "Maksimal": "Maximum",
   "Kecepatan (bitrate)": "Speed (bitrate)",
-  "Geser 1–1000 Mbps. Nilai tinggi = gambar lebih tajam, butuh bandwidth besar.": "Slide 1–1000 Mbps. Higher = sharper picture, needs more bandwidth.",
+  "Geser 1–1000 Mbps. Nilai tinggi = gambar lebih tajam, butuh bandwidth besar. Di atas 300 Mbps hanya lewat jalur cepat UDP (Windows ke Windows, jaringan lokal).": "Slide 1–1000 Mbps. Higher = sharper picture, needs more bandwidth. Above 300 Mbps only over the fast path's UDP link (Windows to Windows, local network).",
   "Asli": "Native", "Codec video": "Video codec", "AV1 (paling hemat)": "AV1 (most efficient)", "AV1 (hemat)": "AV1 (efficient)", "H.264 (kompatibel)": "H.264 (compatible)",
   "Ganti codec menyambung ulang video sesaat.": "Changing the codec briefly reconnects the video.",
   "Tampilkan statistik": "Show statistics", "Sinkron clipboard": "Clipboard sync",
@@ -512,6 +568,9 @@ const TEXT_EN = {
   "Layar gelap gagal: TryDesk di PC remote harus dijalankan sebagai administrator": "Black screen failed: TryDesk on the remote PC must run as administrator",
   "Kunci input ditolak: PC remote hanya mengizinkan mode lihat saja": "Input lock refused: the remote PC only allows view-only mode",
   "Layar gelap ditolak: PC remote hanya mengizinkan mode lihat saja": "Black screen refused: the remote PC only allows view-only mode",
+  "Layar gelap gagal: Windows di PC remote tidak bisa menyembunyikan penutup dari tangkapan layar (butuh Windows 10 versi 2004 atau lebih baru)": "Black screen failed: Windows on the remote PC can't hide the cover from screen capture (needs Windows 10 version 2004 or newer)",
+  "Kunci input dilepas: PC remote mencabut izin kontrol": "Input lock released: the remote PC took back control permission",
+  "Layar gelap dilepas: PC remote mencabut izin kontrol": "Black screen released: the remote PC took back control permission",
   "Mode game: AKTIF (klik mematikan)": "Game mode: ON (click to turn off)", "Mode game (mouse)": "Game mode (mouse)",
   "Transfer file": "File transfer", "Kombinasi tombol": "Key combinations", "Kombinasi tombol dikirim": "Key combination sent",
   "Tombol Windows": "Windows key", "Ambil screenshot": "Take screenshot", "Belum ada video": "No video yet",
@@ -533,7 +592,7 @@ const TEXT_EN = {
   // File transfer + file manager
   "Belum siap untuk transfer": "Not ready to transfer yet", "Satu transfer dulu, lalu ulangi": "One transfer at a time, then try again",
   "Menunggu persetujuan...": "Waiting for approval...", "Dibatalkan": "Cancelled", "Ditolak": "Rejected", "Terkirim": "Sent",
-  "Dibatalkan pengirim": "Cancelled by sender", "Transfer file dinonaktifkan di host": "File transfer is disabled on the host",
+  "Dibatalkan pengirim": "Cancelled by sender", "ukuran file tidak diketahui": "file size unknown", "H.264 · jalur cepat": "H.264 · fast path","Transfer file dinonaktifkan di host": "File transfer is disabled on the host",
   "Manajer File": "File Manager", "Komputer ini": "This computer", "Komputer remote": "Remote computer",
   "Nama": "Name", "Tanggal": "Date", "Tipe": "Type", "Ukuran": "Size", "Unduh": "Download", "Folder": "Folder",
   "Antrean transfer": "Transfer queue", "Bersihkan": "Clear", "Mulai transfer": "Start transfer", "Memuat…": "Loading…",
@@ -552,6 +611,8 @@ const TEXT_EN = {
 for (const [k, v] of Object.entries(I18N.id)) if (I18N.en[k] && !(v in TEXT_EN)) TEXT_EN[v] = I18N.en[k];
 // Strings with a variable part (an ID, a path, a count…). A function replacement can translate the inner part too.
 const TEXT_EN_PATTERNS = [
+  [/^✓ Layanan terpasang( \(berhenti\))?( — ID layanan: ([\d ]+))?$/, (_m, stopped, _i, id) => "✓ Service installed" + (stopped ? " (stopped)" : "") + (id ? " — service ID: " + id : "")],
+  [/^PC ini memakai layanan TryDesk\. Sambung ke ID ([\d ]+)$/, "This PC uses the TryDesk service. Connect to ID $1"],
   [/^Kembali ke sesi (.+)$/, "Back to session $1"],
   [/^Kembali ke (\d+) sesi berjalan$/, "Back to $1 running sessions"],
   [/^(.+) meminta password akses — buka tab tersebut$/, "$1 asks for its access password — open that tab"],
@@ -601,7 +662,7 @@ function trText(s) {
 function tr(s) { return lang === "en" ? trText(String(s)) : s; }
 
 // User / peer content is never translated: chat bodies, chat-notification text, file and transfer names.
-const TR_SKIP = ".help-id, .help-en, .chat-msg > div, .cn-text, .fm-name, .tc-name, #accept-alias, #accept-id, .id-text, .tile-id, .tile-sub-id, .tile-menu-head, .rtab-label, script, style, textarea";
+const TR_SKIP = ".help-id, .help-en, .chat-msg > div, .cn-text, .fm-name, .tc-name, #accept-alias, #accept-id, #connect-pw-name, .id-text, .tile-id, .tile-sub-id, .tile-menu-head, .rtab-label, script, style, textarea";
 const TR_ATTRS = ["title", "placeholder", "aria-label"];
 // Each node remembers its Indonesian source, so switching back restores it exactly. A node the app rewrote
 // since (data no longer equals what we wrote) takes its new text as the source.
@@ -873,7 +934,7 @@ function renderSessionsView() {
   $("#recent-clear").classList.toggle("hidden", homeTab !== "recent" || !recentN);
   const shown = $(homeTab === "fav" ? "#favorites-list" : "#recent-list").children.length;
   const empty = $("#sess-empty");
-  empty.textContent = shown ? "" : q ? "Tidak ada yang cocok dengan pencarian." : homeTab === "fav" ? "Belum ada favorit. Klik bintang pada sebuah perangkat untuk menyimpannya di sini." : "Belum ada koneksi. Perangkat yang pernah Anda hubungi muncul di sini.";
+  empty.textContent = shown ? "" : q ? "Tidak ada yang cocok dengan pencarian." : homeTab === "fav" ? (isPhoneUi() ? "Belum ada favorit. Ketuk ⋮ pada sebuah perangkat, lalu pilih Tambah ke favorit." : "Belum ada favorit. Klik bintang pada sebuah perangkat untuk menyimpannya di sini.") : "Belum ada koneksi. Perangkat yang pernah Anda hubungi muncul di sini.";
   empty.classList.toggle("hidden", !!shown);
 }
 function renderRecent() {
@@ -1039,6 +1100,29 @@ function stopHostingTimer() {
   if (el) el.textContent = "00:00";
 }
 
+// ─── Windows service: one ID, as with AnyDesk ─────────────
+// While the TryDesk service runs on this PC, its host (SYSTEM) answers for the PC under the ID this app had: the
+// app shows that ID, refuses requests itself, and signs in with a second ID kept only to control other PCs.
+let svcId = null;   // the service's ID while it runs ("" = running, ID not known yet); null = no service
+const idKeys = () => (svcId !== null ? { id: "viewerId", token: "viewerToken" } : { id: "myId", token: "myToken" });
+const shownId = () => (svcId !== null ? svcId : myId);
+async function refreshServiceState() {
+  if (!window.electronAPI.serviceStatus || window.TD_MOBILE || viewerOnlyDesktop()) return;
+  let s = null; try { s = await window.electronAPI.serviceStatus(); } catch {}
+  const digits = s && s.installed && s.state === "RUNNING" ? String(s.id || "") : null;
+  const next = digits === null ? null : /^\d{9}$/.test(digits) ? digits.replace(/(\d{3})(\d{3})(\d{3})/, "$1 $2 $3") : "";
+  if (next === svcId) return;
+  const switched = (next === null) !== (svcId === null);
+  svcId = next;
+  myIdText.textContent = shownId() ? fmtId(shownId()) : "…";
+  try { window.electronAPI.setTrayInfo?.({ id: shownId() ? fmtId(shownId()) : "" }); } catch {}
+  $("#btn-regen-id")?.classList.toggle("hidden", svcId !== null);
+  // The service's host darkens this screen now, so it needs the panic key (Ctrl+Alt+Shift+Esc), not this app.
+  if (switched) { try { window.electronAPI.panicKeyYield?.(svcId !== null); } catch {} }
+  if (switched && ws) connectSignaling();   // the other identity
+}
+setInterval(() => { if (!(config && config.serviceHost)) refreshServiceState(); }, 30000);
+
 // ─── Signaling ────────────────────────────────────────────
 function connectSignaling() {
   clearTimeout(reconnectTimer);
@@ -1049,12 +1133,12 @@ function connectSignaling() {
 
   // app = version + platform + OS release, told to the server when signing in (the server checks it against the
   // connection). The Android app has no osRelease; its User-Agent already names the Android version and model.
-  const app = { v: (config && config.appVersion) || "", p: platformName(), ...(config && config.osRelease ? { os: String(config.osRelease).slice(0, 60) } : {}) };
+  const app = { v: (config && config.appVersion) || "", p: platformName(), lang, ...(config && config.osRelease ? { os: String(config.osRelease).slice(0, 60) } : {}) };
   // live = peers this process still has a session with. A fresh start (Run as administrator, a crash, Quit and
   // reopen) sends none, so the server drops pairings the old process left behind instead of keeping them for good.
   ws.onopen = () => {
     const live = [...viewerSessions(), ...(host ? [host] : [])].filter((s) => s.pc && !isLanId(s.peerId)).map((s) => s.peerId);
-    ws.send(JSON.stringify({ type: "register", id: store.get("myId"), token: store.get("myToken"), app, live }));
+    ws.send(JSON.stringify({ type: "register", id: store.get(idKeys().id), token: store.get(idKeys().token), app, live }));
   };
   ws.onmessage = (event) => { let msg; try { msg = JSON.parse(event.data); } catch { return; } onSignal(msg); };
   ws.onclose = () => {
@@ -1070,7 +1154,21 @@ function isMacViewer() { return !window.TD_MOBILE && !!config && config.platform
 function platformName() { return window.TD_MOBILE ? "android" : config && config.platform === "linux" ? "linux" : config && config.platform === "darwin" ? "macos" : "windows"; }
 function sendSignal(data) {
   if (data && isLanId(data.targetId)) { lanSignal(data); return; }
+  // Offers and answers of a password session are signed with the password key, on the ID path as on the LAN path:
+  // the server only relays them, so a server that swapped the SDP (and with it the encryption fingerprint) would be
+  // caught by the other side. ICE candidates may overtake the offer; the receiver keeps them until it arrives.
+  const s = data && (data.type === "offer" || data.type === "answer") ? sessionFor(data.targetId) : null;
+  if (s && s.lanKey) { lanMac(s.lanKey, data.type, data.offer || data.answer).then((mac) => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ ...data, mac })); }); return; }
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
+}
+// A password session: the SDP must carry a valid signature. Without a key (manual Accept) nothing can be checked.
+// A server from before 1.3.3 drops the signature on the way (it relays only offer/answer/candidate); it says so by
+// not announcing sdpMac when registering, and only then is a missing signature let through (never a wrong one).
+let serverSdpMac = false;
+async function sdpMacOk(s, kind, desc, mac) {
+  if (!s || !s.lanKey) return true;
+  if (mac === undefined && !serverSdpMac && !isLanId(s.peerId)) { sessLog(s, `${kind} unsigned: the server does not relay signatures yet`); return true; }
+  return typeof desc === "object" && !!desc && _constEq(String(mac || "").slice(0, 128), await lanMac(s.lanKey, kind, desc));
 }
 
 // ─── LAN direct connection ("Sambung lewat IP") ───────────
@@ -1279,15 +1377,28 @@ async function applyLanHost(on, boot) {
 
 async function onSignal(msg) {
   switch (msg.type) {
-    case "registered":
+    case "registered": {
       myId = msg.clientId;
-      store.set("myId", msg.clientId); store.set("myToken", msg.token);
+      // The ID and owner token are written down only when this PC had none yet, asked for a new ID itself, or got
+      // its own ID back. A server that answered with some other ID (its records lost, or a server that is not
+      // ours any more) gets it used for this run only: it can't rewrite who this PC is for good.
+      const hadToken = !!store.get(idKeys().token), sameId = store.get(idKeys().id) === msg.clientId;
+      const keep = !hadToken || _regenPending || sameId;
+      if (keep) { store.set(idKeys().id, msg.clientId); store.set(idKeys().token, msg.token); }
+      else { try { window.electronAPI.logInfo("server handed out a different ID; not saved (stored ID kept)"); } catch {} }
+      // The service's host takes this ID over when it is installed (identity.json, see main.js).
+      if (keep && svcId === null && !(config && config.serviceHost)) { try { window.electronAPI.exportIdentity(msg.clientId, msg.token); } catch {} }
+      // The service's host has no window: its ID goes to the log (%ProgramData%\TryDesk\service-host), which is
+      // what an administrator reads it from until the app shows it.
+      if (config && config.serviceHost) { try { window.electronAPI.logInfo("service host id " + msg.clientId + (config.servicePwHash ? " (password set)" : " (no password: requests ask for Accept)")); window.electronAPI.setServiceId(msg.clientId); } catch {} }
       serverIceServers = Array.isArray(msg.iceServers) ? msg.iceServers : [];
-      myIdText.textContent = fmtId(myId);
-      try { window.electronAPI.setTrayInfo?.({ id: fmtId(myId) }); } catch {}
+      serverSdpMac = msg.sdpMac === true;
+      myIdText.textContent = fmtId(shownId());
+      try { window.electronAPI.setTrayInfo?.({ id: fmtId(shownId()) }); } catch {}
       setStatus("connected", "Online — siap menerima koneksi");
       if (_regenPending) { _regenPending = false; showToast(t("id_regenerated") + ": " + fmtId(myId)); }
       break;
+    }
     case "incoming-connection": handleIncoming(msg); break;
     case "request-cancelled": {
       // The requester gave up (Cancel / went offline) while we were still asking. Close the accept dialog or
@@ -1342,11 +1453,17 @@ async function onSignal(msg) {
       break;
     }
     case "offer":
-      if (host && msg.fromId === host.peerId) await onOffer(host, msg.offer);
+      if (host && msg.fromId === host.peerId) {
+        if (!(await sdpMacOk(host, "offer", msg.offer, msg.mac))) { sessLog(host, "offer with a bad or missing signature ignored"); break; }
+        await onOffer(host, msg.offer);
+      }
       break;
     case "answer": {
       const s = sessions.get(msg.fromId);
-      if (s && s.pc) { await s.pc.setRemoteDescription(msg.answer); flushCandidates(s); }
+      if (s && s.pc) {
+        if (!(await sdpMacOk(s, "answer", msg.answer, msg.mac))) { sessLog(s, "answer with a bad or missing signature ignored"); break; }
+        await s.pc.setRemoteDescription(msg.answer); flushCandidates(s);
+      }
       break;
     }
     case "ice-candidate": {
@@ -1381,12 +1498,31 @@ async function onSignal(msg) {
       // Errors (target offline/busy) belong to a tab that is still connecting. Newer servers name it in
       // targetId; otherwise fall back to the active tab.
       const s = msg.targetId ? sessions.get(msg.targetId) : active;
-      if (s) sessLog(s, "server: " + String(msg.message || "").slice(0, 80));
+      const text = serverErrorText(msg);
+      if (s) sessLog(s, "server: " + String(msg.code || msg.message || "").slice(0, 80));
       if (s && s.role === "viewer" && s.pc == null) { closeSession(s, false); reconnectFailed(s, ""); }   // offline / busy: try again later
-      showToast(msg.message);
+      showToast(text);
       break;
     }
   }
+}
+// What a server error shows. The server names a code (1.3.3+) and TryDesk has its own text for it; an older server
+// sends one of a few fixed texts, which are shown only when they are TryDesk's own. Anything else gets a plain
+// message: the server must not be able to put arbitrary text in front of the user.
+const SERVER_ERROR_TEXT = {
+  offline: "ID tidak ditemukan atau sedang offline", ratelimit: "Terlalu banyak permintaan, coba lagi sebentar",
+  self: "Tidak bisa me-remote PC Anda sendiri", busy: "Remote desktop sedang dalam sesi lain", "host-offline": "Remote desktop offline",
+  "target-ratelimit": "PC tujuan sedang menerima terlalu banyak permintaan, coba lagi sebentar",
+  "too-old": "TryDesk di PC ini sudah terlalu lama dan tidak bisa terhubung lagi. Perbarui di trydesk.ai.id/downloads",
+  "peer-too-old": "PC tujuan memakai TryDesk versi lama. Minta pemiliknya memperbarui di trydesk.ai.id/downloads",
+  "peer-too-old-host": "Ada yang mencoba terhubung, tapi TryDesk di PC ini versi lama. Perbarui di trydesk.ai.id/downloads",
+};
+function serverErrorText(msg) {
+  const code = typeof msg.code === "string" ? msg.code : "";
+  if (Object.prototype.hasOwnProperty.call(SERVER_ERROR_TEXT, code)) return SERVER_ERROR_TEXT[code];
+  const m = typeof msg.message === "string" ? msg.message.trim() : "";
+  if (m && Object.values(SERVER_ERROR_TEXT).includes(m)) return m;
+  return "Server menolak permintaan ini";
 }
 
 // Session bar label: "Terhubung ke" + the peer. The prefix is its own element so a narrow window can drop it and
@@ -1416,7 +1552,7 @@ function initiateConnection(target, password, { background = false } = {}) {
   if (!lanAddr) {
     if (!myId) return showToast("Belum terhubung ke server — untuk PC di jaringan yang sama, ketik alamat IP-nya");
     if (!/^\d{3} \d{3} \d{3}$/.test(targetId)) return showToast("Masukkan ID 9 digit atau alamat IP");
-    if (targetId === myId) return showToast("Tidak bisa konek ke diri sendiri");
+    if (targetId === myId || (svcId && targetId === svcId)) return showToast("Tidak bisa konek ke diri sendiri");
   }
   if (sessions.has(targetId)) {
     // Double-click on a tile, Enter + click, a second Enter listener: just bring that tab up — a tab still
@@ -1466,8 +1602,8 @@ function initiateConnection(target, password, { background = false } = {}) {
 // password, it doesn't by the owner's choice, so it says so).
 const PW_PROMPT_TEXT = { empty: "", typed: "Password salah. Coba lagi." };
 const PW_WAIT = {
-  id: "Atau tunggu pemilik PC menekan Terima. TryDesk tidak menyimpan password, jadi ketik setiap kali menyambung.",
-  lan: "Lewat IP, hanya password yang bisa membuka akses. TryDesk tidak menyimpan password.",
+  id: "Atau tunggu pemilik PC menekan Terima. Password tidak disimpan.",
+  lan: "Lewat IP, hanya password yang bisa membuka akses. Password tidak disimpan.",
 };
 function showPwPrompt(s, nonce, last) {
   s.pwPrompt = { nonce, last: PW_PROMPT_TEXT[last] ? last : "empty" };
@@ -1484,7 +1620,13 @@ function renderPwPrompt() {
   const lan = isLanId(s.peerId);   // over LAN only the password gets in (no Accept on the other side)
   m.textContent = PW_PROMPT_TEXT[p.last];
   m.classList.toggle("warn", p.last !== "empty");
-  $("#connect-pw-peer").textContent = `PC ${fmtId(s.peerId)} meminta password akses.`;
+  // The PC being opened, as its Recent tile shows it: last picture (or the monitor glyph), name, ID.
+  const name = peerName(s.peerId), thumb = getThumbs()[s.peerId], tb = $("#connect-pw-thumb");
+  tb.classList.toggle("has-thumb", !!thumb);
+  if (thumb) { const img = new Image(); img.alt = ""; img.draggable = false; img.src = thumb; tb.replaceChildren(img); }
+  else tb.innerHTML = MONITOR_SVG;
+  $("#connect-pw-name").textContent = name || fmtId(s.peerId);
+  $("#connect-pw-peer").textContent = name ? fmtId(s.peerId) : lan ? "Jaringan lokal" : "ID TryDesk";
   $("#connect-pw-wait-text").textContent = lan ? PW_WAIT.lan : PW_WAIT.id;
   $("#connect-pw-go").disabled = false;
   $("#connecting-text").textContent = lan ? "Menunggu password akses" : "Menunggu password atau persetujuan pemilik PC";
@@ -1522,7 +1664,7 @@ async function startViewer(sess) {
   sess.dataChannel = pc.createDataChannel("ctrl", { ordered: true });
   sess.dataChannel.onmessage = (m) => { let ev; try { ev = JSON.parse(m.data); } catch { return; } onCtrlMessage(sess, ev); };
   sess.dataChannel.onopen = () => {
-    sendQuality(sess); startClipboardSync(sess);
+    sendQuality(sess); startClipboardSync(sess); reapplyBlackScreen(sess);
     // Once: text copied BEFORE connecting is deliberately not sent (privacy) — say so, or "copy, connect, paste" just seems broken.
     if (clipboardSync && store.get("tipClipBaseline") !== "1" && !document.documentElement.classList.contains("td-mobile")) { store.set("tipClipBaseline", "1"); setTimeout(() => showToast("Tip: teks yang disalin sebelum tersambung tidak ikut dikirim — salin ulang setelah tersambung"), 2500); }
   };
@@ -1532,7 +1674,9 @@ async function startViewer(sess) {
 
   const video = ensureVideo(sess);
   pc.ontrack = (event) => {
-    if (event.streams[0]) video.srcObject = event.streams[0];
+    // While the fast path shows the picture, a renegotiated WebRTC stream is kept aside for when it ends.
+    if (sess.fast && sess.fast.on) { if (event.streams[0]) sess.webrtcStream = event.streams[0]; }
+    else if (event.streams[0]) video.srcObject = event.streams[0];
     else { const s = video.srcObject || new MediaStream(); s.addTrack(event.track); video.srcObject = s; }
     video.muted = !(sess.audioOn && sess === active);   // a background tab stays silent (see showActiveVideo)
     video.volume = Number(prefGet("audioVolume")) / 100;
@@ -1566,7 +1710,9 @@ async function startViewer(sess) {
 function boostStartBitrate(sdp) {
   const startKbps = 12000;                                  // encoder's initial target — start sharp (HD), not a ramp-up
   const minKbps = 1200;                                     // floor kept low so weak links still adapt down, not choke
-  const maxKbps = Math.max(startKbps, Math.round((hostQuality.bitrate || 80) * 1000));
+  // Only a ceiling for the bandwidth estimate: this offer is made by the viewer, the quality can change without a new
+  // offer, and the host's encoder maxBitrate already caps each quality. (It read the viewer's unused hostQuality: 80.)
+  const maxKbps = WEBRTC_MAX_MBPS * 1000;
   const extra = `x-google-start-bitrate=${startKbps};x-google-min-bitrate=${minKbps};x-google-max-bitrate=${maxKbps}`;
   const lines = sdp.split(/\r\n/);
   let vStart = lines.findIndex((l) => l.startsWith("m=video"));
@@ -1664,6 +1810,8 @@ function pwFailed(id) {
 }
 
 async function handleIncoming(msg) {
+  // With the service running, the service's host answers for this PC under its ID; this app only controls others.
+  if (svcId !== null) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: svcId ? `PC ini memakai layanan TryDesk. Sambung ke ID ${svcId}` : "PC ini memakai layanan TryDesk" }); return; }
   if (updateRequired) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: "PC tujuan memakai versi TryDesk lama yang wajib diperbarui" }); return; }
   // The macOS and Linux builds can control other PCs but can't be controlled (screen capture + input are Windows code).
   if (viewerOnlyDesktop()) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: isMacViewer() ? "Perangkat ini memakai TryDesk untuk macOS, yang hanya bisa mengontrol PC Windows" : "PC ini memakai TryDesk untuk Linux, yang saat ini hanya bisa mengontrol PC lain" }); return; }
@@ -1795,22 +1943,51 @@ async function askOwner(pc, hint) {
   const ok = await asked;
   if (!reason) reason = declineReason();
   if (pendingChallenge === pc) pendingChallenge = null;
-  if (ok) await finishAccept(pc.fromId);
+  if (ok) await finishAccept(pc.fromId, true);
   else sendSignal({ type: "connection-rejected", targetId: pc.fromId, reason });
 }
 
 // Build the host session + capture + peer once a requester is authorized (manual accept or challenge).
-async function finishAccept(fromId) {
+async function finishAccept(fromId, viaPassword) {
   const sess = new Session(fromId, "host");
   host = sess;
-  // A LAN session checks the viewer's offers against the password key (the requester proved it knows it), and its
-  // socket now outlives main.js's 90 s limit for requests that never became a session.
-  if (lanIn(fromId)) { sess.lanKey = String(store.get("accessPasswordHash") || "").split(":")[1] || ""; try { window.electronAPI.lanKeep(fromId); } catch {} }
+  // A session that proved the password checks the viewer's offers against the password key (LAN and ID path alike,
+  // see sendSignal). A LAN socket also outlives main.js's 90 s limit for requests that never became a session.
+  if (lanIn(fromId) || viaPassword) sess.lanKey = String(store.get("accessPasswordHash") || "").split(":")[1] || "";
+  if (lanIn(fromId)) { try { window.electronAPI.lanKeep(fromId); } catch {} }
   sessLog(sess, "accepted here, starting screen capture");
   try {
-    sess.monitors = await window.electronAPI.getMonitors();
-    sess.currentMonitor = Math.max(0, sess.monitors.findIndex((m) => m.primary));
-    const { stream, m } = await hostCapture(sess, sess.currentMonitor, true);
+    // A screen that is being replaced right now (RDP window going full screen / reconnecting) can't be captured
+    // for a moment: try a few times before telling the viewer "gagal membagikan layar" (rented PC, 2026-11-02).
+    let cap = null, lastErr = null;
+    // Service host in a disconnected session (RDP closed): nothing is drawn there; move it to the console first.
+    if (config && config.serviceHost) {
+      serviceShowWindow();   // "Remote session active" + Disconnect, as the normal app shows it
+      try {
+        const r = await window.electronAPI.serviceAttachConsole();
+        sessLog(sess, r.ok ? "session moved to the console" : "session stays: " + r.why);
+        if (r.ok) await new Promise((res) => setTimeout(res, 3000));
+      } catch {}
+    }
+    // Two tries here (each can take ~6 s), then the helper below, which retries the screen on its own.
+    for (let i = 0; i < 2 && !cap && host === sess; i++) {
+      if (i) await new Promise((r) => setTimeout(r, 1500));
+      try {
+        sess.monitors = await window.electronAPI.getMonitors();
+        sess.currentMonitor = Math.max(0, sess.monitors.findIndex((m) => m.primary));
+        cap = await hostCapture(sess, sess.currentMonitor, true);
+      } catch (e) { lastErr = e; sessLog(sess, `capture try ${i + 1} failed: ${e && e.message}`); }
+    }
+    // Chromium's capture never came up: take the picture from the DXGI helper instead (see nativeCaptureStream).
+    if (!cap && host === sess) {
+      try {
+        const m = sess.monitors[sess.currentMonitor] || sess.monitors[0];
+        cap = { stream: await nativeCaptureStream(m), m };
+        sessLog(sess, "Chromium capture failed, using the native capture helper");
+      } catch (e) { sessLog(sess, "native capture fallback failed: " + (e && e.message)); }
+    }
+    if (!cap) throw lastErr || new Error("capture failed");
+    const { stream, m } = cap;
     // Hosting was stopped while capture was starting — release the screen instead of streaming it to nobody.
     if (host !== sess) { stream.getTracks().forEach((t) => t.stop()); return; }
     sess.localStream = stream;
@@ -1838,6 +2015,11 @@ async function finishAccept(fromId) {
       sess.fileChannel = ch;
       sess.fileChannel.binaryType = "arraybuffer";
       setupFileChannel(sess, sess.fileChannel);
+    } else if (ch.label === "fast") {
+      // The viewer's channel for fast-path frames (see "Fast path"); only this host writes to it.
+      sess.fastChannel = ch;
+      ch.binaryType = "arraybuffer";
+      ch.onclose = () => { if (sess.fastChannel === ch) { sess.fastChannel = null; hostFastStop(sess, "channel closed"); } };
     } else if (ch.label === "move") {
       // Pointer position only, unordered and never resent: a lost or late move is just skipped (the next one
       // carries the newer position), so one dropped packet no longer stalls every move behind it.
@@ -1848,7 +2030,8 @@ async function finishAccept(fromId) {
       sess.dataChannel.onmessage = (m) => { let ev; try { ev = JSON.parse(m.data); } catch { return; } onCtrlMessage(sess, ev); };
       // caps: tells a 1.2.3+ viewer this host takes pointer moves on the separate "move" channel. An older
       // viewer ignores it; an older host never sends it, so a new viewer keeps everything on this channel.
-      const onCtrlOpen = () => { try { sess.dataChannel.send(JSON.stringify({ __ctrl: "caps", move: 1 })); } catch {} startClipboardSync(sess); sendMonitors(sess); try { window.electronAPI.requestCursorState && window.electronAPI.requestCursorState(); } catch {} try { window.electronAPI.requestAdminWindowState?.(); } catch {} };
+      // fast:1 = this host can run the fast path (Windows, helper present, not turned off); an older viewer ignores it.
+      const onCtrlOpen = () => { let fast = 0; try { fast = _fastAvail && fastEnabled() ? 1 : 0; } catch {} try { sess.dataChannel.send(JSON.stringify({ __ctrl: "caps", move: 1, fast })); } catch {} startClipboardSync(sess); sendMonitors(sess); try { window.electronAPI.requestCursorState && window.electronAPI.requestCursorState(); } catch {} try { window.electronAPI.requestAdminWindowState?.(); } catch {} };
       sess.dataChannel.onopen = onCtrlOpen;
       if (sess.dataChannel.readyState === "open") onCtrlOpen();
     }
@@ -1933,7 +2116,9 @@ function onCtrlMessage(sess, ev) {
     if (sess.role === "viewer" && ev.move && !sess.moveChannel && sess.pc) {
       try { sess.moveChannel = sess.pc.createDataChannel("move", { ordered: false, maxRetransmits: 0 }); } catch (e) { console.warn("move channel", e); }
     }
+    if (sess.role === "viewer" && ev.fast) { sess.hostHasFast = true; viewerFastOpen(sess); }
   }
+  else if (typeof ev.__ctrl === "string" && ev.__ctrl.startsWith("fast-")) onFastCtrl(sess, ev);
   else if (ev.action === "mousemove" && sess.role === "host") onHostMove(sess, ev);
   // Anything else is a remote input event — only execute it when WE are the host AND control is
   // permitted. A modified viewer cannot force input past this host-side gate.
@@ -1950,6 +2135,410 @@ function onHostMove(sess, ev) {
     sess._moveSeq = ev.s;
   }
   window.electronAPI.executeInput(ev);
+}
+
+// ─── Fast path (Windows host → any viewer with hardware H.264 decode) ───
+// Chromium's own screen capture tops out near 60 fps and adds ~35 ms; on a Windows host the native helper
+// (src/native/trydesk-capture.exe, started by main.js) captures with DXGI and encodes on the GPU instead: up to 240 fps,
+// ~2.5 ms from capture to here. Its H.264 frames travel on their own data channel ("fast": unordered, never resent, so
+// one lost packet never holds the next frame back), and the viewer decodes them with WebCodecs into the same <video>
+// (through a MediaStreamTrackGenerator), so scaling, input mapping, screenshots and recording are unchanged.
+// The normal WebRTC video keeps running underneath until the first fast frame is on screen, and comes back the moment
+// anything fails (helper exits, decode error, viewer gives up): the picture never goes away.
+// Negotiation: host "caps" says fast:1 → viewer opens "fast" and sends fast-start → host starts the helper →
+// viewer shows the first decoded frame, sends fast-on → host pauses the WebRTC video encoder.
+const FAST_CHUNK = 60000;                 // bytes of H.264 per data-channel message (Chromium allows up to 256 KiB)
+const FAST_HDR = 20;                      // u8 ver, u8 flags(bit0 key), u16 chunk, u16 chunks, u16 0, u32 seq, f64 captureMs
+const FAST_MAX_BUFFERED = 4 * 1024 * 1024;   // channel backlog past which frames are dropped (the link is too slow)
+let _fastAvail = null;                    // host: helper present on this PC (asked once)
+const fastHostAvailable = async () => { if (_fastAvail === null) { try { _fastAvail = !!(await window.electronAPI.fastCaptureAvailable?.()); } catch { _fastAvail = false; } } return _fastAvail; };
+let _fastDecode = null;                   // viewer: WebCodecs hardware H.264 + MediaStreamTrackGenerator available
+async function fastDecodeSupported() {
+  if (_fastDecode !== null) return _fastDecode;
+  _fastDecode = false;
+  try {
+    if (typeof VideoDecoder === "undefined" || typeof MediaStreamTrackGenerator === "undefined") return false;
+    const r = await VideoDecoder.isConfigSupported({ codec: "avc1.640034", hardwareAcceleration: "prefer-hardware", optimizeForLatency: true });
+    _fastDecode = !!(r && r.supported);
+  } catch {}
+  return _fastDecode;
+}
+// On unless turned off (store "pref.fastPath" = "0"; no Settings switch yet). Not prefGet: that needs a PREFS entry
+// and threw here, which silently dropped the whole "caps" message in the first test.
+const fastEnabled = () => { try { return store.get("pref.fastPath") !== "0"; } catch { return true; } };
+// The fast path's own UDP link (trydesk-udp.h): above WEBRTC_MAX_MBPS the data channel can't keep up, so when both
+// ends are Windows PCs with the helper, the host's helper sends its frames straight to the viewer's helper over UDP
+// (AES-GCM under a key passed on the control channel), and the data channel is only the fallback. Off with
+// store "pref.fastUdp" = "0". The viewer says "udp" in fast-start; the host answers fast-udp {key, port, ips}.
+const fastUdpEnabled = () => { try { return store.get("pref.fastUdp") !== "0"; } catch { return true; } };
+const fastUdpViewerOk = async () => fastUdpEnabled() && !!window.electronAPI.fastUdpRecvStart && (await fastHostAvailable());   // same exe, so the same check
+// Asked once at start-up, so the answers are ready when a session's control channel opens.
+fastHostAvailable(); fastDecodeSupported();
+
+// Inside a Remote Desktop session the screen only changes ~32 times a second (the RDP display's refresh,
+// measured on a rented PC). Asking for more made capture hammer the session: the user's own RDP view stuttered
+// while TryDesk was connected and was smooth again the moment it disconnected (2026-11-02).
+const RDP_FPS = 32;
+const rdpFpsCap = () => (config && config.rdpSession ? RDP_FPS : 240);
+
+// Pause / resume the WebRTC video encoder on the host (the fast path carries the picture meanwhile). The
+// capture behind it is slowed to 1 fps meanwhile too: two full-rate captures of one screen (the helper's and
+// this one) doubled the load for nothing. It stays alive, so falling back to WebRTC is still instant.
+async function setWebrtcVideoActive(sess, on) {
+  const sender = sess.pc && sess.pc.getSenders().find((s) => s.track && s.track.kind === "video");
+  if (!sender) return;
+  try { const p = sender.getParameters(); if (!p.encodings || !p.encodings.length) return; p.encodings.forEach((e) => { e.active = on; }); await sender.setParameters(p); } catch (e) { capLog("webrtc video active=" + on + " failed: " + e.message); }
+  const t = sender.track;
+  if (t && t.readyState === "live") {
+    try { await t.applyConstraints({ frameRate: { ideal: on ? hostCaptureFps : 1, max: on ? hostCaptureFps : 1 } }); }
+    catch (e) { capLog("capture fps for webrtc active=" + on + " failed: " + e.message); }
+  }
+}
+function fastHostRate(sess) {
+  const capMbps = Number(prefGet("bwLimit")) || 0;
+  // Over the data channel the bitrate stays at the Chromium ceiling; the UDP link takes the full quality.
+  const pathMax = sess && sess.fastUdpUp ? BITRATE_MAX_MBPS : WEBRTC_MAX_MBPS;
+  let mbps = Math.min(hostQuality.bitrate, pathMax);
+  if (capMbps > 0) mbps = Math.min(mbps, capMbps);
+  return { fps: Math.min(rdpFpsCap(), hostQuality.fps), mbps: Math.max(1, Math.round(mbps)) };
+}
+// Is this session going through our TURN relay? Then the fast path stays off: its bitrate would land on the server.
+async function viaRelay(sess) {
+  try {
+    const st = await sess.pc.getStats(); let pid = null, pair = null;
+    st.forEach((s) => { if (s.type === "transport" && s.selectedCandidatePairId) pid = s.selectedCandidatePairId; });
+    st.forEach((s) => { if (s.type === "candidate-pair" && (s.id === pid || (!pid && s.nominated && s.state === "succeeded"))) pair = s; });
+    const local = pair && st.get(pair.localCandidateId), remote = pair && st.get(pair.remoteCandidateId);
+    return !!((local && local.candidateType === "relay") || (remote && remote.candidateType === "relay"));
+  } catch { return true; }
+}
+async function hostFastStart(sess) {
+  if (sess.role !== "host" || host !== sess || nativeCap || !fastEnabled() || !(await fastHostAvailable())) { fastCtrl(sess, { __ctrl: "fast-stopped", why: "unavailable" }); return; }
+  if (await viaRelay(sess)) { fastCtrl(sess, { __ctrl: "fast-stopped", why: "relay" }); capLog("fast path off: session goes through the TURN relay"); return; }
+  const m = sess.monitors[sess.currentMonitor] || sess.monitors[0];
+  sess.fastUdpUp = false;
+  const rate = fastHostRate(sess);
+  const udpKey = sess.fastUdpWanted && fastUdpEnabled() ? _hex(crypto.getRandomValues(new Uint8Array(32)).buffer) : null;
+  const r = await window.electronAPI.fastCaptureStart({ displayId: m && m.displayId, ...rate, udp: udpKey }).catch(() => ({ ok: false }));
+  if (!r || !r.ok) { fastCtrl(sess, { __ctrl: "fast-stopped", why: "start failed" }); return; }
+  sess.fastActive = true; sess.fastSeq = 0; sess.fastSkipToKey = false;
+  sess.fastUdpKey = udpKey; sess.fastUdpIps = Array.isArray(r.ips) ? r.ips : [];
+  // Bitrate follows the link (the fast channel has no bandwidth estimate of its own): frames dropped for a backlog
+  // in the last second → 30% down; 5 clean seconds → 15% back up, never above the chosen quality.
+  sess.fastMbps = rate.mbps; sess.fastDrops = 0; sess.fastClean = 0;
+  clearInterval(sess.fastRateTimer);
+  sess.fastRateTimer = setInterval(() => {
+    if (!sess.fastActive) { clearInterval(sess.fastRateTimer); return; }
+    const want = fastHostRate(sess);
+    let mbps = sess.fastMbps;
+    if (sess.fastDrops > 0) { mbps = Math.max(3, Math.round(mbps * 0.7)); sess.fastClean = 0; }
+    else if (++sess.fastClean >= 5 && mbps < want.mbps) { mbps = Math.min(want.mbps, Math.max(mbps + 1, Math.round(mbps * 1.15))); sess.fastClean = 0; }
+    if (mbps > want.mbps) mbps = want.mbps;
+    sess.fastDrops = 0;
+    if (mbps !== sess.fastMbps) { sess.fastMbps = mbps; window.electronAPI.fastCaptureCmd({ cmd: "rate", fps: want.fps, mbps }); }
+  }, 1000);
+  capLog(`fast path started (${rate.fps} fps, ${rate.mbps} Mbps${udpKey ? ", udp offered" : ""})`);
+}
+// Host: what the helper reports (one JSON line each). The UDP port comes with the first info packet; "up"/"lost"
+// follow the viewer's hellos and keepalives, "udpDrops" counts frames its sender had to drop.
+window.electronAPI?.onFastCaptureInfo?.((s) => {
+  const sess = host; if (!sess || !sess.fastActive) return;
+  let j = null; try { j = JSON.parse(s); } catch { return; }
+  if (j.udpPort > 0 && sess.fastUdpKey) fastCtrl(sess, { __ctrl: "fast-udp", key: sess.fastUdpKey, port: j.udpPort, ips: sess.fastUdpIps });
+  if (j.udp === "up" || j.udp === "lost") {
+    sess.fastUdpUp = j.udp === "up";
+    // Jump to the path's ceiling at once (ramping 15% a second from 300 to 1000 took most of a minute).
+    const want = fastHostRate(sess); sess.fastMbps = want.mbps; sess.fastClean = 0;
+    window.electronAPI.fastCaptureCmd({ cmd: "rate", fps: want.fps, mbps: want.mbps });
+    capLog(sess.fastUdpUp ? `fast path: UDP link up (${j.peer || ""}), ${want.mbps} Mbps` : `fast path: UDP link lost, back to the data channel at ${want.mbps} Mbps`);
+  }
+  if (j.udpDrops > 0) sess.fastDrops = (sess.fastDrops || 0) + j.udpDrops;
+});
+function hostFastStop(sess, why) {
+  if (!sess.fastActive) return;
+  sess.fastActive = false;
+  clearInterval(sess.fastRateTimer);
+  try { window.electronAPI.fastCaptureStop(); } catch {}
+  setWebrtcVideoActive(sess, true);
+  capLog("fast path stopped: " + why);
+}
+const fastCtrl = (sess, msg) => { try { if (sess.dataChannel && sess.dataChannel.readyState === "open") sess.dataChannel.send(JSON.stringify(msg)); } catch {} };
+// ─── Native capture fallback ──────────────────────────────
+// When Chromium's own capture can't start at all — TryDesk run as administrator inside an RDP session failed every
+// try with "Could not start video source" while its capture process crashed (rented PC, 2026-11-02) — the picture
+// comes from TryDesk's DXGI helper instead: its H.264 is decoded here and handed to WebRTC as an ordinary video
+// track, so every viewer (phone, Mac, old versions) still gets it. The fast path stays off while this runs.
+let nativeCap = null;
+async function nativeCaptureStream(m) {
+  if (!(await fastHostAvailable()) || typeof MediaStreamTrackGenerator === "undefined") throw new Error("native capture unavailable");
+  stopNativeCapture();
+  const gen = new MediaStreamTrackGenerator({ kind: "video" });
+  const writer = gen.writable.getWriter();
+  let pending = 0, codec = "";
+  const dec = new VideoDecoder({
+    // A frame the track can't take yet is dropped, not queued: the newest picture is what matters.
+    output: (frame) => { if (pending > 2) { frame.close(); return; } pending++; writer.write(frame).catch(() => {}).finally(() => { pending--; }); },
+    error: (e) => capLog("native capture decode: " + e.message),
+  });
+  const rate = { fps: Math.min(rdpFpsCap(), hostQuality.fps || 60), mbps: 40 };
+  const cap = nativeCap = {
+    m, gen, dec,
+    packet(p) {
+      if (p.key) {
+        const c = fastCodecFromSps(p.data) || "avc1.640034";
+        if (c !== codec) { codec = c; try { dec.configure({ codec, optimizeForLatency: true }); } catch (e) { capLog("native capture config: " + e.message); } }
+      }
+      if (dec.state !== "configured") return;
+      if (dec.decodeQueueSize > 4 && !p.key) { window.electronAPI.fastCaptureCmd({ cmd: "key" }); return; }
+      try { dec.decode(new EncodedVideoChunk({ type: p.key ? "key" : "delta", timestamp: Math.round(p.t * 1000), data: p.data })); } catch {}
+    },
+    // The helper ends on a display change (exit 3): start it again on the same track.
+    async restart() {
+      if (nativeCap !== cap) return;
+      const r = await window.electronAPI.fastCaptureStart({ displayId: m && m.displayId, ...rate }).catch(() => ({ ok: false }));
+      if (nativeCap !== cap) return;
+      if (r && r.ok) { codec = ""; window.electronAPI.fastCaptureCmd({ cmd: "key" }); capLog("native capture restarted"); }
+      else setTimeout(() => cap.restart(), 3000);
+    },
+  };
+  const r = await window.electronAPI.fastCaptureStart({ displayId: m && m.displayId, ...rate }).catch(() => ({ ok: false }));
+  if (!r || !r.ok) { stopNativeCapture(); throw new Error("native capture helper did not start"); }
+  window.electronAPI.fastCaptureCmd({ cmd: "key" });
+  capLog(`native capture started (${rate.fps} fps)`);
+  return new MediaStream([gen]);
+}
+function stopNativeCapture() {
+  if (!nativeCap) return;
+  const c = nativeCap; nativeCap = null;
+  try { c.dec.close(); } catch {}
+  try { c.gen.stop(); } catch {}
+  try { window.electronAPI.fastCaptureStop(); } catch {}
+}
+
+// Host: one encoded frame from the helper → chunks on the fast channel.
+function hostFastPacket(p) {
+  if (nativeCap) { nativeCap.packet(p); return; }
+  const sess = host;
+  if (!sess || !sess.fastActive) return;
+  const ch = sess.fastChannel;
+  if (!ch || ch.readyState !== "open") return;
+  // A backlog means the link can't carry this bitrate: drop frames, then restart from a keyframe once it drains.
+  if (ch.bufferedAmount > FAST_MAX_BUFFERED) { if (!sess.fastSkipToKey) capLog("fast path backlog, dropping to next keyframe"); sess.fastSkipToKey = true; sess.fastDrops = (sess.fastDrops || 0) + 1; return; }
+  if (sess.fastSkipToKey) {
+    if (!p.key) { if (ch.bufferedAmount < FAST_MAX_BUFFERED / 4 && !sess._fastKeyAsked) { sess._fastKeyAsked = true; window.electronAPI.fastCaptureCmd({ cmd: "key" }); } return; }
+    sess.fastSkipToKey = false; sess._fastKeyAsked = false;
+  }
+  const data = p.data, seq = (sess.fastSeq = (sess.fastSeq + 1) >>> 0);
+  const chunks = Math.max(1, Math.ceil(data.length / FAST_CHUNK));
+  for (let i = 0; i < chunks; i++) {
+    const part = data.subarray(i * FAST_CHUNK, Math.min(data.length, (i + 1) * FAST_CHUNK));
+    const buf = new ArrayBuffer(FAST_HDR + part.length), dv = new DataView(buf);
+    dv.setUint8(0, 1); dv.setUint8(1, p.key ? 1 : 0); dv.setUint16(2, i, true); dv.setUint16(4, chunks, true); dv.setUint16(6, 0, true);
+    dv.setUint32(8, seq, true); dv.setFloat64(12, p.t, true);
+    new Uint8Array(buf, FAST_HDR).set(part);
+    try { ch.send(buf); } catch { return; }
+  }
+}
+window.electronAPI?.onFastCapturePacket?.(hostFastPacket);
+window.electronAPI?.onFastCaptureEnded?.((d) => {
+  if (nativeCap) { capLog(`native capture helper exited (${d && d.code})`); const c = nativeCap; setTimeout(() => c.restart(), 1500); return; }
+  const sess = host;
+  if (!sess || !sess.fastActive) return;
+  hostFastStop(sess, `helper exited (${d && d.code})`);
+  fastCtrl(sess, { __ctrl: "fast-stopped", why: `helper ${d && d.code}` });
+});
+function onFastCtrl(sess, ev) {
+  if (sess.role === "host") {
+    // A peer can't make this host churn: one start while running, keyframes at most 4 a second.
+    if (ev.__ctrl === "fast-start") { if (!sess.fastActive && !sess._fastStarting) { sess._fastStarting = true; sess.fastUdpWanted = !!ev.udp; hostFastStart(sess).finally(() => { sess._fastStarting = false; }); } }
+    else if (ev.__ctrl === "fast-on") { if (sess.fastActive) setWebrtcVideoActive(sess, false); }
+    else if (ev.__ctrl === "fast-key") { if (sess.fastActive && performance.now() - (sess._fastKeyAt || 0) > 250) { sess._fastKeyAt = performance.now(); window.electronAPI.fastCaptureCmd({ cmd: "key" }); } }
+    else if (ev.__ctrl === "fast-off") { hostFastStop(sess, "viewer: " + String(ev.why || "")); }
+    // The viewer's receiver is listening: its addresses go to the helper, which sends hellos there as well (so
+    // either side's firewall sees outbound traffic first). At most 8 private IPv4 addresses, checked again in main.
+    else if (ev.__ctrl === "fast-udp-peer") { if (sess.fastActive && sess.fastUdpKey) { const port = Math.round(Number(ev.port)); for (const ip of (Array.isArray(ev.ips) ? ev.ips : []).slice(0, 8)) if (typeof ip === "string" && port > 0) window.electronAPI.fastCaptureCmd({ cmd: "peer", ip, port }); } }
+    else if (ev.__ctrl === "fast-udp-off") { if (sess.fastActive) { sess.fastUdpUp = false; window.electronAPI.fastCaptureCmd({ cmd: "udp", on: 0 }); const want = fastHostRate(sess); sess.fastMbps = want.mbps; window.electronAPI.fastCaptureCmd({ cmd: "rate", fps: want.fps, mbps: want.mbps }); } }
+    else if (ev.__ctrl === "fast-udp-loss") { if (sess.fastActive) sess.fastDrops = (sess.fastDrops || 0) + Math.min(100, Math.max(0, Math.round(Number(ev.n)) || 0)); }
+  } else if (ev.__ctrl === "fast-udp") { viewerFastUdpStart(sess, ev); }
+  else if (ev.__ctrl === "fast-stopped") {
+    viewerFastStop(sess, "host: " + String(ev.why || ""), false);
+    // The host's screen changed size (exit 3) or a monitor switch failed: try the fast path again shortly. Waits
+    // double each time and stop after 6 tries without a frame: a host whose capture never comes up (an RDP
+    // session) restarted the helper every 2 s for as long as the session lasted.
+    // "display changed": the host has a fresh display (RDP reconnect), so earlier failures don't count.
+    if (ev.why === "display changed") sess._fastRetries = 0;
+    if (/^helper 3$|monitor switch|display changed/.test(String(ev.why || ""))) {
+      const n = sess._fastRetries = (sess._fastRetries || 0) + 1;
+      // After 6 quick tries, once a minute: an RDP window that was minimized for a while (no picture at all)
+      // must get the fast path back by itself once it is shown again.
+      if (n === 7) sessLog(sess, "fast path: host capture keeps failing, WebRTC meanwhile; retrying every minute");
+      setTimeout(() => { if (sessions.get(sess.peerId) === sess && sess.hostHasFast) viewerFastOpen(sess); }, n > 6 ? 60000 : Math.min(30000, 2000 * 2 ** (n - 1)));
+    }
+    // "relay": ICE often starts on the TURN relay and moves to a direct pair seconds later (rented PC, 2026-11-02:
+    // relay at start, srflx<->srflx after), which left the fast path off for the whole session. Ask again
+    // while this side no longer sees a relay, a few times.
+    else if (ev.why === "relay") {
+      const retry = async () => {
+        const n = sess._fastRelayRetries = (sess._fastRelayRetries || 0) + 1;
+        if (n > 6 || sessions.get(sess.peerId) !== sess || !sess.hostHasFast) return;
+        if (await viaRelay(sess)) setTimeout(retry, 10000); else viewerFastOpen(sess);
+      };
+      setTimeout(retry, 5000);
+    }
+  }
+}
+
+// Viewer: reassemble frames, decode in order, show. A gap (lost chunk) skips to the next keyframe.
+async function viewerFastOpen(sess) {
+  if (sess.role !== "viewer" || sess.fastChannel || !sess.pc || !fastEnabled() || !(await fastDecodeSupported())) return;
+  let ch;
+  try { ch = sess.pc.createDataChannel("fast", { ordered: false, maxRetransmits: 0 }); } catch (e) { console.warn("fast channel", e); return; }
+  ch.binaryType = "arraybuffer";
+  sess.fastChannel = ch;
+  sess.fast = { frames: new Map(), next: 0, waitKey: true, keyAskedAt: 0, decoder: null, codec: "", gen: null, writer: null, on: false, udpOn: false, stats: { frames: 0, bytes: 0 } };
+  const udp = await fastUdpViewerOk();
+  ch.onopen = () => fastCtrl(sess, { __ctrl: "fast-start", udp: udp ? 1 : 0 });
+  ch.onmessage = (m) => viewerFastChunk(sess, m.data);
+}
+// Viewer end of the UDP link. The host's helper is listening on {port} at one of {ips}; our receiver helper sends
+// hellos there and we tell the host where we listen, so its helper can send hellos here as well. Frames then arrive
+// whole through onFastUdpPacket; the data channel copies are ignored while the link is up.
+let _fastUdpSess = null;   // the one session whose receiver helper runs (one helper per app)
+async function viewerFastUdpStart(sess, ev) {
+  const f = sess.fast;
+  if (sess.role !== "viewer" || !f || f.udpStarted || !(await fastUdpViewerOk())) return;
+  if (typeof ev.key !== "string" || !/^[0-9a-f]{64}$/i.test(ev.key)) return;
+  f.udpStarted = true;
+  const r = await window.electronAPI.fastUdpRecvStart({ key: ev.key, port: Number(ev.port) || 0, ips: Array.isArray(ev.ips) ? ev.ips : [] }).catch(() => ({ ok: false }));
+  if (!r || !r.ok || sess.fast !== f) { if (r && r.ok) try { window.electronAPI.fastUdpRecvStop(); } catch {} return; }
+  _fastUdpSess = sess;
+  fastCtrl(sess, { __ctrl: "fast-udp-peer", port: r.port, ips: r.ips });
+  sessLog(sess, "fast path: UDP link offered, waiting for the host's helper");
+}
+function viewerFastUdpStop(sess, why) {
+  const f = sess.fast;
+  if (_fastUdpSess === sess) { _fastUdpSess = null; try { window.electronAPI.fastUdpRecvStop(); } catch {} }
+  if (f && f.udpOn) { f.udpOn = false; f.waitKey = true; f.frames.clear(); fastCtrl(sess, { __ctrl: "fast-udp-off", why }); fastAskKey(sess); sessLog(sess, "fast path: UDP link off (" + why + "), data channel again"); }
+}
+window.electronAPI?.onFastUdpPacket?.((p) => {
+  const sess = _fastUdpSess, f = sess && sess.fast; if (!f || !(p.data instanceof Uint8Array)) return;
+  if (!f.udpOn) { f.udpOn = true; f.waitKey = true; f.frames.clear(); sessLog(sess, "fast path: frames arriving over the UDP link"); }
+  f.stats.bytes += p.data.length;
+  if (p.gap && !p.key) { fastAskKey(sess); return; }   // the receiver skipped a lost frame: decode from the next keyframe
+  if (f.waitKey) { if (!p.key) { fastAskKey(sess); return; } f.waitKey = false; }
+  viewerFastDecode(sess, { parts: [p.data], key: !!p.key, t: Number(p.t) || 0 });
+});
+window.electronAPI?.onFastUdpInfo?.((s) => {
+  const sess = _fastUdpSess, f = sess && sess.fast; if (!f) return;
+  let j = null; try { j = JSON.parse(s); } catch { return; }
+  if (j.udp === "lost" && f.udpOn) { f.udpOn = false; f.waitKey = true; f.frames.clear(); fastAskKey(sess); sessLog(sess, "fast path: UDP link quiet, data channel again"); }
+  if (j.udpLost > 0) fastCtrl(sess, { __ctrl: "fast-udp-loss", n: j.udpLost });
+});
+window.electronAPI?.onFastUdpEnded?.(() => { const sess = _fastUdpSess; if (sess) viewerFastUdpStop(sess, "receiver exited"); });
+function fastAskKey(sess) {
+  const f = sess.fast; if (!f) return;
+  f.waitKey = true;
+  if (performance.now() - f.keyAskedAt > 250) { f.keyAskedAt = performance.now(); fastCtrl(sess, { __ctrl: "fast-key" }); }
+}
+function viewerFastChunk(sess, buf) {
+  const f = sess.fast; if (!f || f.udpOn || !(buf instanceof ArrayBuffer) || buf.byteLength <= FAST_HDR) return;
+  const dv = new DataView(buf);
+  if (dv.getUint8(0) !== 1) return;
+  const key = !!(dv.getUint8(1) & 1), idx = dv.getUint16(2, true), count = dv.getUint16(4, true), seq = dv.getUint32(8, true), t = dv.getFloat64(12, true);
+  // At most 256 chunks (~15 MB) per frame and 64 frames in flight: a misbehaving peer can't make this hoard memory.
+  if (!count || idx >= count || count > 256) return;
+  if (!f.frames.has(seq) && f.frames.size >= 64) { f.frames.clear(); fastAskKey(sess); }
+  let fr = f.frames.get(seq);
+  if (!fr) { fr = { parts: new Array(count), got: 0, key, t, first: performance.now() }; f.frames.set(seq, fr); }
+  if (fr.parts[idx]) return;
+  fr.parts[idx] = new Uint8Array(buf, FAST_HDR); fr.got++;
+  f.stats.bytes += buf.byteLength;
+  viewerFastDrain(sess);
+}
+function viewerFastDrain(sess) {
+  const f = sess.fast; if (!f) return;
+  for (;;) {
+    // Waiting for a keyframe: jump to the newest complete one, drop everything before it.
+    if (f.waitKey) {
+      let best = null;
+      for (const [s, fr] of f.frames) if (fr.key && fr.got === fr.parts.length && (best === null || s > best)) best = s;
+      if (best === null) { if (f.frames.size > 60) for (const s of [...f.frames.keys()].slice(0, f.frames.size - 30)) f.frames.delete(s); if (!f.keyAskedAt || performance.now() - f.keyAskedAt > 500) fastAskKey(sess); return; }
+      for (const s of [...f.frames.keys()]) if (s < best) f.frames.delete(s);
+      f.next = best; f.waitKey = false;
+    }
+    const fr = f.frames.get(f.next);
+    if (fr && fr.got === fr.parts.length) {
+      f.frames.delete(f.next); f.next = (f.next + 1) >>> 0;
+      viewerFastDecode(sess, fr);
+      continue;
+    }
+    // The next frame is missing: wait a moment (unordered delivery), then treat it as lost.
+    const waitingSince = fr ? fr.first : Math.min(...[...f.frames.values()].map((x) => x.first), Infinity);
+    if (f.frames.size && (performance.now() - waitingSince > 60 || f.frames.size > 8)) { fastAskKey(sess); continue; }
+    return;
+  }
+}
+function fastCodecFromSps(au) {
+  for (let i = 0; i + 6 < au.length; i++) if (au[i] === 0 && au[i + 1] === 0 && au[i + 2] === 1 && (au[i + 3] & 31) === 7) {
+    const h = (x) => x.toString(16).padStart(2, "0");
+    return `avc1.${h(au[i + 4])}${h(au[i + 5])}${h(au[i + 6])}`;
+  }
+  return "";
+}
+function viewerFastDecode(sess, fr) {
+  const f = sess.fast;
+  let len = 0; for (const p of fr.parts) len += p.length;
+  const au = new Uint8Array(len); let o = 0; for (const p of fr.parts) { au.set(p, o); o += p.length; }
+  if (fr.key) {
+    const codec = fastCodecFromSps(au) || f.codec || "avc1.640034";
+    if (!f.decoder || codec !== f.codec) {
+      try { f.decoder && f.decoder.close(); } catch {}
+      f.codec = codec;
+      f.decoder = new VideoDecoder({ output: (frame) => viewerFastShow(sess, frame), error: (e) => viewerFastStop(sess, "decode error: " + e.message, true) });
+      try { f.decoder.configure({ codec, hardwareAcceleration: "prefer-hardware", optimizeForLatency: true }); }
+      catch (e) { viewerFastStop(sess, "decoder config: " + e.message, true); return; }
+    }
+  }
+  if (!f.decoder || f.decoder.state !== "configured") return;
+  if (f.decoder.decodeQueueSize > 4) { fastAskKey(sess); return; }   // decoder falling behind: skip ahead
+  try { f.decoder.decode(new EncodedVideoChunk({ type: fr.key ? "key" : "delta", timestamp: Math.round(fr.t * 1000), data: au })); }
+  catch (e) { fastAskKey(sess); }
+}
+function viewerFastShow(sess, frame) {
+  const f = sess.fast;
+  if (!f || sessions.get(sess.peerId) !== sess) { frame.close(); return; }
+  f.stats.frames++; f.lastCaptureMs = frame.timestamp / 1000;
+  if (!f.gen) {
+    f.gen = new MediaStreamTrackGenerator({ kind: "video" });
+    f.writer = f.gen.writable.getWriter();
+  }
+  if (f.pending > 2) { frame.close(); return; }   // the <video> is behind: drop this frame, the next one is newer
+  f.pending = (f.pending || 0) + 1;
+  f.writer.write(frame).catch(() => {}).finally(() => { f.pending--; });
+  if (!f.on) {
+    // First fast frame is in: show the fast track (keeping the WebRTC audio) and let the host pause its WebRTC video.
+    f.on = true;
+    const v = ensureVideo(sess);
+    sess.webrtcStream = sess.webrtcStream || v.srcObject;
+    const audio = sess.webrtcStream ? sess.webrtcStream.getAudioTracks() : [];
+    v.srcObject = new MediaStream([f.gen, ...audio]);
+    fastCtrl(sess, { __ctrl: "fast-on" });
+    sess._fastRetries = 0;
+    sessLog(sess, `fast path on (${f.codec})`);
+  }
+}
+function viewerFastStop(sess, why, tellHost) {
+  const f = sess.fast; if (!f) return;
+  if (_fastUdpSess === sess) { _fastUdpSess = null; try { window.electronAPI.fastUdpRecvStop(); } catch {} }
+  sess.fast = null;
+  try { f.decoder && f.decoder.state !== "closed" && f.decoder.close(); } catch {}
+  try { f.writer && f.writer.close().catch(() => {}); } catch {}
+  try { f.gen && f.gen.stop(); } catch {}
+  try { sess.fastChannel && sess.fastChannel.close(); } catch {}
+  sess.fastChannel = null;
+  if (f.on && sess.video && sess.webrtcStream) sess.video.srcObject = sess.webrtcStream;
+  if (tellHost) fastCtrl(sess, { __ctrl: "fast-off", why });
+  sessLog(sess, "fast path off: " + why);
 }
 
 // ─── Remote filesystem browsing (serves the peer's file manager) ───
@@ -2037,13 +2626,15 @@ function displayMediaWithTimeout(constraints, ms = 8000) {
 
 async function hostCapture(sess, index, withAudio) {
   const m = sess.monitors[index] || sess.monitors[0];
+  // Development builds only: make Chromium's capture fail, to test the native capture fallback.
+  if (config && config.testNoChromiumCapture) throw new Error("Could not start video source (test)");
   // Capture at the frame rate the CHOSEN PRESET needs (not always max), so GPU/encode load tracks the
   // user's quality choice. HIGH-REFRESH (144/165/180/240) is possible ONLY via getDisplayMedia (the modern
   // capture path). The legacy desktopCapturer mandatory maxFrameRate hard-caps at 120 (>120 silently falls
   // back to 30fps, measured), so getDisplayMedia is primary and desktopCapturer is the fallback (≤120).
   const CAPTURE_FPS_MAX = 240;
   const IDLE_MIN_FPS = 12;   // keep a static screen fresh (cheap repeat frames) → no stale frame / resume stutter
-  const wantFps = Math.max(30, Math.min(CAPTURE_FPS_MAX, Math.round(hostQuality.fps || 60)));
+  const wantFps = Math.max(30, Math.min(rdpFpsCap(), CAPTURE_FPS_MAX, Math.round(hostQuality.fps || 60)));
   const W = Math.round(m.width * m.scaleFactor), H = Math.round(m.height * m.scaleFactor);
   let stream, via = "gdm";
   try {
@@ -2123,6 +2714,7 @@ async function swapCaptureTrack(sess, index) {
   // The session may have closed while this swap waited its turn — release the screen instead of leaking it.
   if (!sess.pc || sess.pc.connectionState === "closed") { stream.getTracks().forEach((t) => t.stop()); return; }
   await sender.replaceTrack(newVideo);
+  stopNativeCapture();   // Chromium's capture works again: the helper fallback is no longer needed
   if (sess.videoTrack) sess.videoTrack.stop();
   sess.videoTrack = newVideo;
   // Keep localStream's video in sync (audio track preserved) so later applyConstraints target the live track
@@ -2139,6 +2731,13 @@ async function switchMonitor(sess, index) {
   if (!Number.isInteger(index) || index < 0 || index >= sess.monitors.length || !sess.pc) return;
   try { await replaceCaptureTrack(sess, index, true, "switch"); applyQualityToSender(sess, hostQuality); }
   catch (e) { console.error("switchMonitor gagal", e); }
+  // The fast path follows: restart the helper on the new monitor (its first frame is a keyframe at the new size).
+  if (sess.fastActive) {
+    const m = sess.monitors[sess.currentMonitor];
+    const r = await window.electronAPI.fastCaptureStart({ displayId: m && m.displayId, ...fastHostRate() }).catch(() => ({ ok: false }));
+    if (!r || !r.ok) { hostFastStop(sess, "monitor switch"); fastCtrl(sess, { __ctrl: "fast-stopped", why: "monitor switch" }); }
+    else setWebrtcVideoActive(sess, false);   // the new capture track starts at full rate: slow it again
+  }
   // Report the monitor actually being streamed, so the viewer's picker never claims a switch that failed.
   sendMonitors(sess);
 }
@@ -2149,7 +2748,7 @@ const _clampNum = (v, lo, hi, cur) => { const n = Number(v); return Number.isFin
 async function applyQualityToSender(sess, q) {
   q = q || {};
   hostQuality = {
-    bitrate: _clampNum(q.bitrate, 0.1, 200, hostQuality.bitrate),
+    bitrate: _clampNum(q.bitrate, 0.1, BITRATE_MAX_MBPS, hostQuality.bitrate),
     fps: Math.round(_clampNum(q.fps, 1, 240, hostQuality.fps)),
     resHeight: _clampNum(q.resHeight, 0, 4320, hostQuality.resHeight),
   };
@@ -2171,9 +2770,10 @@ async function applyQualityToSender(sess, q) {
     const enc = params.encodings[0];
     // Settings → Koneksi → upload bandwidth limit caps whatever the viewer asks for.
     const capMbps = Number(prefGet("bwLimit")) || 0;
-    const mbps = capMbps > 0 ? Math.min(hostQuality.bitrate, capMbps) : q.bitrate;
-    if (mbps != null) enc.maxBitrate = Math.round(mbps * 1_000_000);
-    if (q.fps != null) enc.maxFramerate = q.fps;
+    // The clamped values (hostQuality), never the peer's raw ones.
+    const mbps = capMbps > 0 ? Math.min(hostQuality.bitrate, capMbps) : hostQuality.bitrate;
+    enc.maxBitrate = Math.round(mbps * 1_000_000);
+    if (q.fps != null) enc.maxFramerate = hostQuality.fps;
     enc.networkPriority = "high";
     if (q.resHeight != null) {
       enc.scaleResolutionDownBy = (q.resHeight > 0 && hostCaptureHeight > q.resHeight)
@@ -2188,15 +2788,17 @@ async function applyQualityToSender(sess, q) {
   catch (e) { try { await setEncoder(); } catch (e2) { console.warn("setParameters failed", e2); capLog("setParameters failed: " + e2.message); } }
   if (q.fps != null) {
     const vt = sess.localStream && sess.localStream.getVideoTracks()[0];
-    if (vt) vt.applyConstraints({ frameRate: { ideal: q.fps, max: q.fps } }).catch(() => {});
+    if (vt) vt.applyConstraints({ frameRate: { ideal: hostQuality.fps, max: hostQuality.fps } }).catch(() => {});
   }
+  // A new quality choice restarts the fast path's rate from the top (the 1 s loop lowers it again if the link can't).
+  if (sess.fastActive) { const r = fastHostRate(); sess.fastMbps = r.mbps; try { window.electronAPI.fastCaptureCmd({ cmd: "rate", ...r }); } catch {} }
 }
 
 // Host display resolution/scale changed → refresh the monitor list and re-capture the current
 // screen so the stream resets at the new size (clean keyframe) and input mapping stays correct.
 let displayRecapturing = false;
 if (window.electronAPI && window.electronAPI.onDisplayChanged) {
-  window.electronAPI.onDisplayChanged(async () => {
+  window.electronAPI.onDisplayChanged(async (force) => {
     const sess = host;
     if (!sess || sess.role !== "host" || !sess.pc || displayRecapturing) return;
     displayRecapturing = true;
@@ -2207,7 +2809,13 @@ if (window.electronAPI && window.electronAPI.onDisplayChanged) {
       // Only re-capture when the monitor we're streaming actually changed resolution/scale. Fullscreen games
       // and sandboxes fire display-metrics repeatedly with NO real size change — re-capturing on those was
       // the main cause of the "berkedip-kedip" flicker during gameplay. Skip the no-op events.
-      if (mon && sess._capW === mon.width && sess._capH === mon.height && sess._capSF === mon.scaleFactor) {
+      // force: the display itself was replaced (RDP reconnect, move to the console), so the old capture shows
+      // black even at the same size — same path as picking the monitor again, which brought the picture back.
+      if (force) {
+        await switchMonitor(sess, idx);
+        // The fast path may have given up while the display was gone: let the viewer start it again.
+        if (!sess.fastActive && (await fastHostAvailable())) fastCtrl(sess, { __ctrl: "fast-stopped", why: "display changed" });
+      } else if (mon && sess._capW === mon.width && sess._capH === mon.height && sess._capSF === mon.scaleFactor) {
         sendMonitors(sess);   // keep the list fresh, but don't reset the stream
       } else {
         await replaceCaptureTrack(sess, null, false, "display changed");
@@ -2262,7 +2870,7 @@ function createPeer(sess) {
       clearTimeout(sess.p2pTimer);
       sess.everConnected = true; sess.reconnectAttempts = 0;
       if (sess.role === "viewer") stopReconnect(sess.peerId);
-      else clearTimeout(lockGraceTimer);   // the viewer came back within the grace period: don't lock
+      else { clearTimeout(lockGraceTimer); blackGraceOnConnect(sess); }   // the viewer came back within the grace period: don't lock
       updateDiscordPresence();
     }
     else if (pc.connectionState === "failed") {
@@ -2359,6 +2967,26 @@ function lockAfterSession(sess, deliberate) {
   if (deliberate) lock();
   else lockGraceTimer = setTimeout(() => { if (!host || !host.everConnected) lock(); }, 60000);
 }
+// The dark cover kept over an unexpected drop (see closeSession). The same viewer gets 5 s after reconnecting to ask
+// for it again (its app does so by itself); anyone else connecting, the panic key, or the end of the grace lifts it.
+let blackScreenGrace = false, blackGracePeer = null, blackGraceTimer = null;
+function startBlackGrace(peerId) {
+  blackScreenGrace = true; blackGracePeer = peerId;
+  clearTimeout(blackGraceTimer);
+  blackGraceTimer = setTimeout(endBlackGrace, prefGet("lockAfter") ? 62000 : 20000);
+}
+function endBlackGrace() {
+  clearTimeout(blackGraceTimer); blackGraceTimer = null;
+  if (!blackScreenGrace) return;
+  blackScreenGrace = false;
+  if (host && host.blackScreenActive) return;   // the reconnected viewer took the cover over
+  try { window.electronAPI.disableBlackScreen(); } catch {}
+}
+function blackGraceOnConnect(sess) {
+  if (!blackScreenGrace) return;
+  clearTimeout(blackGraceTimer);
+  blackGraceTimer = setTimeout(endBlackGrace, sess.peerId === blackGracePeer ? 5000 : 0);
+}
 function flushCandidates(sess) { for (const c of sess.pendingCandidates) sess.pc.addIceCandidate(c).catch(() => {}); sess.pendingCandidates = []; }
 
 // Tear down ONE session (a viewer tab, or the single host session) and update the UI.
@@ -2371,9 +2999,10 @@ function closeSession(sess, notify = true, reason = "") {
   let byeSent = false;
   sessLog(sess, `closed (${notify ? "on purpose" : "dropped"}${reason ? ": " + reason : ""}, was ${sess.everConnected ? "connected" : "never connected"})`);
   clearTimeout(sess.p2pTimer);
-  if (notify) { byeSent = sendBye(sess, reason); if (isViewer) stopReconnect(sess.peerId); }
+  if (notify) { byeSent = sendBye(sess, reason); if (isViewer) { stopReconnect(sess.peerId); wantBlackScreen.delete(sess.peerId); } }
   if (isViewer) { clearTimeout(sess.thumbTimer); if (sess.hasFrame) saveThumb(sess); }
   if (isViewer && recordingActive && recordingSess === sess) stopRecording();   // flush & save THIS tab's recording
+  if (isViewer) viewerFastStop(sess, "session closed", false); else { hostFastStop(sess, "session closed"); stopNativeCapture(); }
   // Tell the server to drop THIS specific pairing (targetId scopes it to the right peer so other
   // tabs survive). On an old single-session server, targetId is simply ignored.
   // A deliberate end also says so through the server (bye + reason): the P2P "bye" can't go out when the control
@@ -2418,13 +3047,17 @@ function closeSession(sess, notify = true, reason = "") {
     lockAfterSession(sess, notify || !!sess.byeReceived);
     if (acceptDlgCancel) acceptDlgCancel();
     if (acceptTimerHandle) { clearInterval(acceptTimerHandle); acceptTimerHandle = null; }
-    try { window.electronAPI.disableBlackScreen(); } catch {}
+    // An unexpected drop (Wi-Fi blip) while dark keeps the cover a little longer, so the person at this PC doesn't
+    // see what the viewer left open while it reconnects; with "lock after session" until Windows has locked.
+    if (sess.blackScreenActive && sess.everConnected && !(notify || sess.byeReceived)) startBlackGrace(sess.peerId);
+    else { endBlackGrace(); try { window.electronAPI.disableBlackScreen(); } catch {} }
     try { window.electronAPI.disableInputLock(); } catch {}
     stopHostingTimer();
     $("#overlay-accept").classList.add("hidden");
     hostCaptureHeight = 0;
     $("#blackscreen-notice")?.classList.add("hidden");
     host = null;
+    if (config && config.serviceHost && !acceptPending) serviceHideWindow();
     showScreen(viewerSessions().length ? "remote" : "home");
     if (viewerSessions().length && active) switchTab(active);
     return;
@@ -2555,6 +3188,10 @@ function showActiveVideo() {
   }
 }
 
+// The service's host window is hidden unless a request is waiting or a session runs (main.js, service-*-window).
+const serviceHideWindow = () => { try { window.electronAPI.serviceHideWindow(); } catch {} };
+const serviceShowWindow = () => { try { window.electronAPI.serviceShowWindow(); } catch {} };
+
 // ─── Accept request (AnyDesk-style with countdown) ────────
 const ACCEPT_TIMEOUT = 30; // seconds
 // Why the last Accept dialog ended without a yes: nobody answered (timed out) vs. the owner clicked Tolak.
@@ -2568,8 +3205,13 @@ function setAcceptHint(text) {
 }
 
 function askAccept(fromId, fromName, hint = "") {
+  // The service's host asks too: its window (SYSTEM, on the user's desktop) comes up with just this dialog. Nobody
+  // there (lock screen, login screen): it times out like any unanswered request; the password still gets in.
+  // A dark cover still up from a dropped session would hide this dialog (the covers sit above every window): the
+  // person here must see who is asking, so the cover goes first.
+  endBlackGrace();
   return new Promise((resolve) => {
-    try { window.electronAPI.focusWindow(); } catch {}
+    try { window.electronAPI.focusWindow(true); } catch {}   // on top until answered (see main.js)
     $("#accept-id").textContent = fromId;
     setAcceptHint(hint);
     const aliasEl = $("#accept-alias");
@@ -2610,6 +3252,8 @@ function askAccept(fromId, fromName, hint = "") {
       acceptDlgSettle = null;
       if (acceptTimerHandle) { clearInterval(acceptTimerHandle); acceptTimerHandle = null; }
       ov.classList.add("hidden");
+      try { window.electronAPI.focusWindow(false); } catch {}
+      if (config && config.serviceHost && !val) serviceHideWindow();
       acc.removeEventListener("click", onAcc);
       rej.removeEventListener("click", onRej);
       resolve(val);
@@ -2882,20 +3526,55 @@ function sendPrivacyResult(sess, feature, enabled, ok, reason) {
   }
 }
 
+// The host answers every request to darken: ok, or why not. Hosts before 1.3.2 only ever answered a refusal.
 async function handleBlackScreen(sess, enabled) {
   if (enabled && !hostControlAllowed()) { sendPrivacyResult(sess, "black-screen", true, false, "denied"); return; }
-  sess.blackScreenActive = !!enabled;
-  if (enabled) await window.electronAPI.enableBlackScreen();
-  else await window.electronAPI.disableBlackScreen();
-  $("#blackscreen-notice").classList.toggle("hidden", !enabled);
+  // Requests are numbered: an "off" that arrives while the covers are still being made wins, and the late answer
+  // of the earlier "on" is dropped instead of claiming a dark screen (main handles the two calls in order).
+  const req = sess.blackReq = (sess.blackReq || 0) + 1;
+  if (!enabled) {
+    sess.blackScreenActive = false;
+    try { await window.electronAPI.disableBlackScreen(); } catch {}
+    $("#blackscreen-notice").classList.add("hidden");
+    return;
+  }
+  let ok = false;
+  try { const r = await window.electronAPI.enableBlackScreen(); ok = r === true || !!(r && r.ok); } catch {}
+  if (sess.blackReq !== req) return;
+  // The session may have ended while the covers were being made: nobody would be left to lift them.
+  if (host !== sess) { try { window.electronAPI.disableBlackScreen(); } catch {} return; }
+  sess.blackScreenActive = ok;
+  $("#blackscreen-notice").classList.toggle("hidden", !ok);
+  sendPrivacyResult(sess, "black-screen", true, ok, ok ? "" : "failed");
 }
+
+// Redraw the open Control Center sub-menu so its check marks follow what the host reported.
+function ccRefreshFlyout() { if (ccFlyoutCat === "security" && ccFlyoutRow) { try { ccOpenFlyout(ccFlyoutCat, ccFlyoutRow); } catch {} } }
 
 function toggleBlackScreen() {
   const sess = active; if (!sess || !sess.dataChannel || sess.dataChannel.readyState !== "open") return;
   sess.blackScreenActive = !sess.blackScreenActive;
   sess.dataChannel.send(JSON.stringify({ __ctrl: "black-screen", enabled: sess.blackScreenActive }));
   $("#btn-blackscreen").classList.toggle("active", sess.blackScreenActive);
-  showToast(sess.blackScreenActive ? "Layar remote digelapkan" : "Layar remote dikembalikan");
+  // Remembered per PC, so an auto-reconnect after a network drop darkens the screen again.
+  wantBlackScreen.set(sess.peerId, sess.blackScreenActive);
+  clearTimeout(sess.blackAckTimer);
+  if (!sess.blackScreenActive) { showToast("Layar remote dikembalikan"); return; }
+  // "Darkened" is said once the host confirms it. An older host stays silent on success, so silence counts too.
+  sess.blackAckTimer = setTimeout(() => { if (sess.blackScreenActive && sess.pc) showToast("Layar remote digelapkan"); }, 2500);
+}
+const wantBlackScreen = new Map();
+// After a reconnect: ask for the dark screen again if the viewer had it on before the drop.
+function reapplyBlackScreen(sess) {
+  if (sess.role !== "viewer") return;
+  // A connection made by hand starts fresh: only an automatic reconnect carries the wish over (the old one could
+  // be left over from a session the host ended, and would darken a later session nobody asked to darken).
+  if (!sess.isReconnect) { wantBlackScreen.delete(sess.peerId); return; }
+  if (!wantBlackScreen.get(sess.peerId) || sess.blackScreenActive) return;
+  if (!sess.dataChannel || sess.dataChannel.readyState !== "open") return;
+  sess.blackScreenActive = true;
+  sess.dataChannel.send(JSON.stringify({ __ctrl: "black-screen", enabled: true }));
+  if (sess === active) $("#btn-blackscreen").classList.add("active");
 }
 
 // ─── Lock host input ──────────────────────────────────────
@@ -2910,24 +3589,36 @@ async function handleLockInput(sess, enabled) {
 
 // Host: the local panic key (Ctrl+Alt+Shift+Esc) dropped the black screen / input lock — update this UI and tell the viewer.
 if (window.electronAPI && window.electronAPI.onPrivacyReleased) {
-  window.electronAPI.onPrivacyReleased(() => {
+  // why "failed": main had to lift the covers because a display that appeared mid-session couldn't be excluded from
+  // capture (only the dark screen is affected then, not the input lock).
+  window.electronAPI.onPrivacyReleased((why) => {
+    blackScreenGrace = false;
     const sess = host; if (!sess) return;
     $("#blackscreen-notice")?.classList.add("hidden");
-    if (sess.blackScreenActive) { sess.blackScreenActive = false; sendPrivacyResult(sess, "black-screen", true, false, "released"); }
+    if (sess.blackScreenActive) { sess.blackScreenActive = false; sendPrivacyResult(sess, "black-screen", true, false, why === "failed" ? "failed" : "released"); }
+    if (why === "failed") return;
     if (sess.inputLocked) { sess.inputLocked = false; sendPrivacyResult(sess, "lock-input", true, false, "released"); }
   });
 }
 
 // Viewer: the host refused or couldn't apply black screen / input lock — undo the optimistic toggle and say why.
 function onPrivacyResult(sess, ev) {
-  if (ev.ok) return;
+  if (ev.feature === "black-screen") clearTimeout(sess.blackAckTimer);
+  if (ev.ok) {
+    if (ev.feature === "black-screen" && sess.blackScreenActive) showToast("Layar remote digelapkan");
+    return;
+  }
   if (ev.feature === "lock-input") { sess.inputLocked = false; if (sess === active) $("#btn-lock-input").classList.remove("active"); }
-  else if (ev.feature === "black-screen") { sess.blackScreenActive = false; if (sess === active) $("#btn-blackscreen").classList.remove("active"); }
+  else if (ev.feature === "black-screen") { sess.blackScreenActive = false; wantBlackScreen.delete(sess.peerId); if (sess === active) $("#btn-blackscreen").classList.remove("active"); }
   else return;
-  const what = ev.feature === "lock-input" ? "Kunci input" : "Layar gelap";
-  showToast(ev.reason === "admin" ? `${what} gagal: TryDesk di PC remote harus dijalankan sebagai administrator`
-    : ev.reason === "released" ? `${what} dilepas oleh pengguna di PC remote`
-    : `${what} ditolak: PC remote hanya mengizinkan mode lihat saja`);
+  ccRefreshFlyout();
+  // Whole sentences (not "${what} gagal"), so each one is a TEXT_EN key the release audit can find.
+  const lock = ev.feature === "lock-input";
+  showToast(ev.reason === "admin" ? (lock ? "Kunci input gagal: TryDesk di PC remote harus dijalankan sebagai administrator" : "Layar gelap gagal: TryDesk di PC remote harus dijalankan sebagai administrator")
+    : ev.reason === "failed" && !lock ? "Layar gelap gagal: Windows di PC remote tidak bisa menyembunyikan penutup dari tangkapan layar (butuh Windows 10 versi 2004 atau lebih baru)"
+    : ev.reason === "released" ? (lock ? "Kunci input dilepas oleh pengguna di PC remote" : "Layar gelap dilepas oleh pengguna di PC remote")
+    : ev.reason === "revoked" ? (lock ? "Kunci input dilepas: PC remote mencabut izin kontrol" : "Layar gelap dilepas: PC remote mencabut izin kontrol")
+    : (lock ? "Kunci input ditolak: PC remote hanya mengizinkan mode lihat saja" : "Layar gelap ditolak: PC remote hanya mengizinkan mode lihat saja"));
 }
 
 function toggleLockInput() {
@@ -3146,17 +3837,24 @@ function sendOneFile(sess, file) {
     try {
       readId = await window.electronAPI.fileOpenRead(file.path);
       let sent = 0;
+      const pace = filePacer(ch);
       while (true) {
         if (sess.activeSend?.canceled) throw new Error("canceled");
         const { done, chunk } = await window.electronAPI.fileReadChunk(readId, CHUNK);
         if (done) break;
-        while (ch.bufferedAmount > BUFFER_HIGH) await sleep(20);
-        ch.send(chunk);
+        await pace(chunk);
         sent += chunk.byteLength || chunk.length;
-        card.progress(sent, file.size);
+        // Count what has left this PC, not what is queued: with up to 8 MB queued on a slow link the bar ran
+        // ahead and said "Terkirim" while the data was still here (rented PC, 2026-11-02).
+        card.progress(Math.max(0, sent - ch.bufferedAmount), file.size);
       }
       await window.electronAPI.fileCloseRead(readId);
       ch.send(JSON.stringify({ t: "done", id }));
+      while (ch.bufferedAmount > 0 && ch.readyState === "open") {
+        if (sess.activeSend?.canceled) throw new Error("canceled");
+        card.progress(Math.max(0, sent - ch.bufferedAmount), file.size);
+        await sleep(100);
+      }
       card.setSub("Terkirim"); card.finish(true);
     } catch (e) {
       if (readId) window.electronAPI.fileCloseRead(readId);
@@ -3282,14 +3980,14 @@ async function onFileControl(sess, ev) {
 async function streamManagerChunks(sess, send) {
   const ch = sess.fileChannel;
   send.streaming = true;
+  const pace = filePacer(ch);
   try {
     while (true) {
       if (send.canceled) throw new Error("canceled");
       while (send.paused && !send.canceled) await sleep(120);
       const { done, chunk } = await window.electronAPI.fileReadChunk(send.readId, CHUNK);
       if (done) break;
-      while (ch.bufferedAmount > BUFFER_HIGH) await sleep(20);
-      ch.send(chunk);
+      await pace(chunk);
     }
     await window.electronAPI.fileCloseRead(send.readId);
     ch.send(JSON.stringify({ t: "m-done", id: send.id }));
@@ -3694,13 +4392,13 @@ function fmUpload(item, sess) {
       readId = await window.electronAPI.fileOpenRead(item.srcPath);
       let sent = 0;
       const doneP = new Promise((r) => { sess.activeSend.onDone = r; });
+      const pace = filePacer(sess.fileChannel);
       while (true) {
         if (item.canceled || sess.activeSend.canceled) throw new Error("canceled");
         while (item.paused && !item.canceled) await sleep(120);
         const { done, chunk } = await window.electronAPI.fileReadChunk(readId, CHUNK);
         if (done) break;
-        while (sess.fileChannel.bufferedAmount > BUFFER_HIGH) await sleep(20);
-        sess.fileChannel.send(chunk);
+        await pace(chunk);
         sent += chunk.byteLength || chunk.length;
         fmProgress(item, sent);
       }
@@ -3818,7 +4516,7 @@ function sendQuality(sess) {
 function syncQualityUI() {
   const q = qualityOf();
   $("#bitrate-slider").value = q.bitrate;
-  $("#bitrate-number").value = q.bitrate;
+  $("#bitrate-number").value = Math.min(q.bitrate, BITRATE_MAX_MBPS);   // an older saved 500 shows as the real ceiling
   $$("#fps-row .chip").forEach((c) => c.classList.toggle("active", +c.dataset.fps === q.fps));
   $$("#res-row .chip").forEach((c) => c.classList.toggle("active", +c.dataset.scale === q.resHeight));
   $("#codec-select").value = q.codec;
@@ -3895,6 +4593,18 @@ async function pollStats(sess) {
     const v = sess.video;
     $("#stat-res").textContent = (v && v.videoWidth) ? `${v.videoWidth}×${v.videoHeight}` : "-";
     $("#stat-codec").textContent = codecMime || "-";
+  }
+  // Fast path on: the picture comes from the fast channel, not the (paused) WebRTC video — show its numbers.
+  const fst = sess.fast && sess.fast.on ? sess.fast.stats : null;
+  if (fst) {
+    const now = performance.now(), dt = fst.at ? (now - fst.at) / 1000 : 0;
+    if (show && dt > 0) {
+      $("#stat-fps").textContent = `${Math.round((fst.frames - fst.lastFrames) / dt)}`;
+      $("#stat-bitrate").textContent = `${(((fst.bytes - fst.lastBytes) * 8) / dt / 1e6).toFixed(1)} Mbps`;
+      $("#stat-codec").textContent = "H.264 · jalur cepat";
+      $("#stat-loss").textContent = "-";
+    }
+    fst.at = now; fst.lastFrames = fst.frames; fst.lastBytes = fst.bytes;
   }
   if (pair) {
     const rtt = pair.currentRoundTripTime != null ? Math.round(pair.currentRoundTripTime * 1000) : null;
@@ -4301,6 +5011,7 @@ $("#setting-auto-reconnect").addEventListener("change", (e) => {
 const PREFS = {
   notifyIncoming: { el: "#setting-notify-incoming", def: true },
   notifySound:    { el: "#setting-notify-sound", def: true },
+  uiSound:        { el: "#setting-ui-sound", def: true, apply: (v, boot) => { if (v && !boot) uiSound("switch"); } },
   closeToTray:    { el: "#setting-close-to-tray", def: true },
   discord:        { el: "#setting-discord", def: true, apply: (v) => window.electronAPI.setDiscordEnabled(v) },
   connTimeout:    { el: "#setting-timeout", def: "60" },
@@ -4398,6 +5109,77 @@ function chime() {
     setTimeout(() => ctx.close(), 600);
   } catch {}
 }
+
+// ─── Button feel: spring press + click sound ──────────────
+// The main buttons give way under the finger and spring back, the way a Remotion spring() moves: a damped
+// oscillator from 0 to 1 (mass 1; stiffness / damping per motion). The math is written here, not taken from
+// Remotion, whose licence doesn't fit AGPL. The `scale` property is used so it stacks with each button's own
+// hover/active transform. Off when the system asks for reduced motion.
+const PRESS_SEL = "#btn-connect, #btn-connect-files, #connect-pw-go, #btn-accept, #btn-reject, #btn-copy, #btn-stop-hosting, #btn-cancel-connect, #btn-lan-help-ok, .view-btn, .m-tab";
+const SPRING_PRESS = { mass: 1, stiffness: 520, damping: 32 };     // quick, no wobble going in
+const SPRING_RELEASE = { mass: 1, stiffness: 240, damping: 13 };   // back out with one small overshoot
+const reducedMotion = window.matchMedia ? window.matchMedia("(prefers-reduced-motion: reduce)") : { matches: false };
+function springProgress(t, { mass = 1, stiffness = 100, damping = 10 } = {}) {
+  const w0 = Math.sqrt(stiffness / mass), zeta = damping / (2 * Math.sqrt(stiffness * mass));
+  if (zeta < 1) {
+    const wd = w0 * Math.sqrt(1 - zeta * zeta);
+    return 1 - Math.exp(-zeta * w0 * t) * (Math.cos(wd * t) + (zeta * w0 / wd) * Math.sin(wd * t));
+  }
+  return 1 - Math.exp(-w0 * t) * (1 + w0 * t);
+}
+function springScale(el, to, cfg) {
+  cancelAnimationFrame(el._springRaf);
+  if (reducedMotion.matches || !("scale" in el.style)) { el._springAt = 1; el.style.scale = ""; return; }
+  const from = el._springAt ?? 1, t0 = performance.now();
+  const w0 = Math.sqrt(cfg.stiffness / cfg.mass), zeta = cfg.damping / (2 * Math.sqrt(cfg.stiffness * cfg.mass));
+  const settle = Math.min(1.2, Math.log(1000) / (Math.min(zeta, 1) * w0));   // seconds until the motion is under 0.1 %
+  const step = (now) => {
+    const t = (now - t0) / 1000;
+    if (t >= settle) { el._springAt = to; el.style.scale = to === 1 ? "" : String(to); return; }
+    el._springAt = from + (to - from) * springProgress(t, cfg);
+    el.style.scale = el._springAt.toFixed(4);
+    el._springRaf = requestAnimationFrame(step);
+  };
+  el._springRaf = requestAnimationFrame(step);
+}
+function pressTarget(e) { const b = e.target.closest && e.target.closest(PRESS_SEL); return b && !b.disabled ? b : null; }
+document.addEventListener("pointerdown", (e) => { const b = pressTarget(e); if (b) { b._pressed = true; springScale(b, 0.95, SPRING_PRESS); } }, true);
+const pressRelease = (b) => { if (b && b._pressed) { b._pressed = false; springScale(b, 1, SPRING_RELEASE); } };
+// Release by the element itself, not pressTarget: a button disabled mid-press must still spring back.
+for (const type of ["pointerup", "pointercancel"]) document.addEventListener(type, (e) => pressRelease(e.target.closest && e.target.closest(PRESS_SEL)), true);
+// Sliding the finger off the button lets it go too (leave doesn't bubble, but capture still sees it).
+document.addEventListener("pointerleave", (e) => { if (e.target.matches && e.target.matches(PRESS_SEL)) pressRelease(e.target); }, true);
+// Enter / Space has no pointer: a short dip and back, so the keyboard gets the same answer.
+document.addEventListener("click", (e) => {
+  if (e.detail !== 0) return;
+  const b = pressTarget(e); if (!b) return;
+  springScale(b, 0.95, SPRING_PRESS);
+  setTimeout(() => springScale(b, 1, SPRING_RELEASE), 90);
+}, true);
+
+// Click sounds: CC0 sounds from Remotion's sound-effect collection (assets/sfx, credits in NOTICE), played quietly
+// on the buttons that start or answer a connection. Silent while any remote session runs, in either direction:
+// the host's sound can travel to the viewer, and nobody wants clicks over a remote PC's audio. Settings → Umum.
+const SFX_BASE = window.TD_MOBILE ? "sfx/" : "../../assets/sfx/";
+const SFX_VOLUME = 0.22;
+const SOUND_SEL = { click: "#btn-connect, #btn-connect-files, #connect-pw-go, #btn-accept, #btn-reject, #btn-copy, #btn-stop-hosting, #btn-cancel-connect", switch: ".view-btn" };
+const _sfx = {};
+function uiSound(name, force = false) {
+  if (!force && (!prefGet("uiSound") || host || viewerSessions().some((s) => s.pc))) return;
+  try {
+    const base = _sfx[name] || (_sfx[name] = Object.assign(new Audio(SFX_BASE + name + ".wav"), { preload: "auto" }));
+    const a = base.paused ? base : base.cloneNode();   // a quick double click still plays twice
+    a.volume = SFX_VOLUME; a.currentTime = 0;
+    const p = a.play(); if (p && p.catch) p.catch(() => {});
+  } catch {}
+}
+document.addEventListener("click", (e) => {
+  if (!e.target.closest) return;
+  for (const [name, sel] of Object.entries(SOUND_SEL)) {
+    const b = e.target.closest(sel);
+    if (b && !b.disabled && !(name === "switch" && b.classList.contains("active"))) { uiSound(name); return; }
+  }
+}, true);
 
 // ─── Event listeners ──────────────────────────────────────
 $("#btn-connect").addEventListener("click", initiateConnection);
@@ -4700,7 +5482,7 @@ $$(".preset-btn").forEach((b) => b.addEventListener("click", () => setQuality(PR
 $("#bitrate-slider").addEventListener("input", (e) => { $("#bitrate-number").value = e.target.value; });
 $("#bitrate-slider").addEventListener("change", (e) => setQuality({ bitrate: clampBitrate(e.target.value) }));
 $("#bitrate-number").addEventListener("change", (e) => { const v = clampBitrate(e.target.value); e.target.value = v; $("#bitrate-slider").value = v; setQuality({ bitrate: v }); });
-function clampBitrate(v) { return Math.min(1000, Math.max(1, Math.round(+v) || 1)); }
+function clampBitrate(v) { return Math.min(BITRATE_MAX_MBPS, Math.max(1, Math.round(+v) || 1)); }
 
 // FPS + resolution chips
 $$("#fps-row .chip").forEach((c) => c.addEventListener("click", () => setQuality({ fps: +c.dataset.fps })));
@@ -4762,7 +5544,7 @@ $("#btn-screenshot").addEventListener("click", takeScreenshot);
 $("#btn-blackscreen").addEventListener("click", toggleBlackScreen);
 $("#btn-lock-input").addEventListener("click", toggleLockInput);
 
-$("#btn-copy").addEventListener("click", () => { if (myId) navigator.clipboard.writeText(myId).then(() => showToast(t("id_copied"))); });
+$("#btn-copy").addEventListener("click", () => { const id = shownId(); if (id) navigator.clipboard.writeText(id).then(() => showToast(t("id_copied"))); });
 
 // Opt-in ID rotation: drop the stored identity and reconnect so the server issues a FRESH id+token.
 // The persistent-by-default ID is preserved; this is a deliberate, confirmed security action.
@@ -4822,7 +5604,35 @@ $("#btn-run-admin")?.addEventListener("click", async () => {
     showToast("TryDesk dibuka ulang sebagai administrator. Jendela baru muncul dalam beberapa detik, jangan buka TryDesk lagi sebelum itu.");
   }
 });
-window.electronAPI?.onElevatedRelaunchBlocked?.(() => showToast("TryDesk administrator tidak jadi terbuka karena TryDesk ini sudah berjalan. Klik kanan ikon TryDesk di tray → Keluar, lalu pilih Jalankan sebagai administrator lagi."));
+// Windows service (unattended access): installed with the current access password; its host has its own ID.
+async function refreshServiceUI() {
+  const g = $("#service-group"); if (!g || !window.electronAPI?.serviceStatus) return;
+  let s; try { s = await window.electronAPI.serviceStatus(); } catch { s = null; }
+  g.style.display = s && s.supported ? "" : "none";
+  if (!s || !s.supported) return;
+  const st = $("#service-state");
+  st.textContent = s.installed ? "✓ Layanan terpasang" + (s.state === "RUNNING" ? "" : " (berhenti)") : "Layanan belum terpasang.";
+  st.classList.toggle("on", !!s.installed);
+  $("#btn-service-install").classList.toggle("hidden", !!s.installed);
+  $("#btn-service-remove").classList.toggle("hidden", !s.installed);
+}
+// Installed with the current access password, if there is one (without: every request asks Accept). The app
+// switches to its second ID right away, before the service's host signs in with this PC's ID.
+$("#btn-service-install")?.addEventListener("click", async () => {
+  const saved = store.get("accessPasswordHash"), hash = /^[0-9a-f]{32}:[0-9a-f]{64}$/.test(saved || "") ? saved : "";
+  showToast("Memasang layanan… setujui prompt UAC.");
+  let r; try { r = await window.electronAPI.serviceInstall(hash); } catch { r = { ok: false, code: 1 }; }
+  if (r.ok) showToast("Layanan terpasang. ID PC ini tetap sama.");
+  else showToast(r.code === 1223 ? "UAC dibatalkan — layanan tidak dipasang" : tr("Layanan gagal dipasang") + ` (${r.code})`);
+  await refreshServiceState(); await refreshServiceUI();
+});
+$("#btn-service-remove")?.addEventListener("click", async () => {
+  let r; try { r = await window.electronAPI.serviceUninstall(); } catch { r = { ok: false, code: 1 }; }
+  showToast(r.ok ? "Layanan dihapus" : r.code === 1223 ? "UAC dibatalkan — layanan tetap terpasang" : tr("Layanan gagal dihapus") + ` (${r.code})`);
+  await refreshServiceState(); refreshServiceUI();
+});
+refreshServiceUI();
+window.electronAPI?.onElevatedRelaunchBlocked?.(() =>showToast("TryDesk administrator tidak jadi terbuka karena TryDesk ini sudah berjalan. Klik kanan ikon TryDesk di tray → Keluar, lalu pilih Jalankan sebagai administrator lagi."));
 refreshElevationUI();
 // Access password: type → saved (as a salted hash) when the field is left or Enter is pressed; the trash button
 // removes it. The eye button keeps focus in the field, so what you typed can be checked before it is saved.
@@ -4842,7 +5652,14 @@ $("#btn-clear-pass").addEventListener("click", () => {
   accessPassword.value = "";
   updateAccessPwUI();
   showToast("Password akses dihapus");
+  syncServicePassword(null);
 });
+// The service's host answers for this PC while it runs: the password goes to it too (one UAC prompt).
+async function syncServicePassword(hash) {
+  if (svcId === null) return;
+  let r; try { r = await window.electronAPI.serviceSetPassword(hash || ""); } catch { r = { ok: false, code: 1 }; }
+  if (!r.ok) showToast(r.code === 1223 ? "UAC dibatalkan — password layanan tidak berubah" : tr("Password layanan gagal diubah") + ` (${r.code})`);
+}
 accessPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") accessPassword.blur(); });
 accessPassword.addEventListener("change", async () => {
   const value = accessPassword.value;
@@ -4854,6 +5671,7 @@ accessPassword.addEventListener("change", async () => {
   accessPassword.type = "password";
   updateAccessPwUI();
   showToast("Password akses disimpan");
+  syncServicePassword(store.get("accessPasswordHash"));
 });
 
 // Digits are grouped as an ID ("123 456 789"); anything with a dot, colon or letter is left alone — an IP address
@@ -4943,8 +5761,15 @@ function hostPermsChanged() {
   if (!hostControlAllowed()) {
     try { window.electronAPI.releaseRemoteInput(); } catch {}
     try { window.electronAPI.disableInputLock(); } catch {}
-    // A viewer who darkened this screen must not keep it dark after control is revoked — restore it too.
-    if (host.blackScreenActive) { try { window.electronAPI.disableBlackScreen(); } catch {} host.blackScreenActive = false; }
+    if (host.inputLocked) { host.inputLocked = false; sendPrivacyResult(host, "lock-input", true, false, "revoked"); }
+    // A viewer who darkened this screen must not keep it dark after control is revoked — restore it too, and say
+    // so, or the viewer's toggle keeps claiming a dark screen the person here can now see.
+    if (host.blackScreenActive) {
+      try { window.electronAPI.disableBlackScreen(); } catch {}
+      host.blackScreenActive = false;
+      $("#blackscreen-notice")?.classList.add("hidden");
+      sendPrivacyResult(host, "black-screen", true, false, "revoked");
+    }
   }
   if (!hostFilesAllowed()) {
     if (host.activeRecv) { discardRecv(host.activeRecv); host.activeRecv = null; }
@@ -5023,6 +5848,27 @@ $("#update-dismiss").addEventListener("click", () => { if (updateInfo) store.set
   $("#clipboard-toggle").checked = clipboardSync;
   applyAccessSettings();
   initPrefs();
+  // Service host: the access password is the one an administrator set for the service (service.json), never one
+  // left in this profile; without it every request is refused (askAccept above).
+  if (config.serviceHost) {
+    store.set("accessPasswordHash", config.servicePwHash || null); autoAcceptWithPassword = true;
+    // SYSTEM can read any file on the PC: no file transfer from the service's host (main.js refuses it too).
+    store.set("allowFile", "0"); applyAccessSettings();
+    document.documentElement.classList.add("svc-host");
+    // First start: take over the ID the user's own TryDesk has been using, so the PC keeps its ID. Until that
+    // identity exists (an app older than this one never wrote it), check again every 10 s while idle.
+    const adopt = async () => {
+      if (store.get("svcAdopted") === "1") return;
+      let u = null; try { u = await window.electronAPI.serviceUserIdentity(); } catch {}
+      if (!u || host || acceptPending) return;
+      store.set("svcAdopted", "1");
+      if (u.id === store.get("myId")) return;
+      store.set("myId", u.id); store.set("myToken", u.token);
+      if (ws) connectSignaling();
+    };
+    await adopt();
+    const t = setInterval(() => { if (store.get("svcAdopted") === "1") clearInterval(t); else adopt(); }, 10000);
+  } else await refreshServiceState();
   checkUpdate(); setInterval(checkUpdate, 6 * 3600 * 1000);   // at start, then every 6 hours
   syncDefaultQualityUI();
   // A pre-1.0 unsalted hash can't do the challenge, so it silently meant "always ask Accept" — drop it and say so.

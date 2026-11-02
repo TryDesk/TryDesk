@@ -33,11 +33,15 @@ strengthen these guarantees are especially welcome.
 
 - **Content:** screen, input, files, clipboard and chat travel peer to peer over WebRTC, encrypted with DTLS-SRTP.
   The signaling server and the TURN relay only see encrypted traffic.
-  - **Known limit (internet ID path):** the offer/answer that carries the DTLS fingerprints is relayed by the
-    signaling server and is not yet signed (on the LAN path it is). A server operator, or someone who has taken over
-    the server, could therefore swap the fingerprints and sit in the middle of a session. Signing the ID-path
-    offer/answer with the access-password key, plus a short code to compare on both screens for Accept-only
-    sessions, is planned together with the PAKE work.
+  - **Password sessions (1.3.3+):** the offer/answer that carries the DTLS fingerprints is signed with the
+    access-password key on the internet ID path too (the LAN path has done this since 1.2.5), so the signaling
+    server, or someone who has taken it over, can no longer swap the fingerprints and sit in the middle.
+  - **Known limit (Accept-only sessions):** with no shared password there is nothing to sign with, so a taken-over
+    server could still sit in the middle of a session that was let in by clicking Accept. A short code to compare
+    on both screens is planned together with the PAKE work. Set an access password where this matters.
+  - **Identity and updates (1.3.3+):** the app keeps its stored ID and owner token when the server hands out a
+    different ID (it is used for that run only), and `version.json` is Ed25519-signed with a key that is never on the
+    website, so a web-hosting break-in cannot force an update or disable the app.
 - **Stored secrets:** the access password is kept only as its PBKDF2 key, but that key is what answers a challenge,
   so anyone who can read TryDesk's local data (malware running as the user, a copied profile) can use it like the
   password. Keep the user profile safe and change the password if it may have leaked. Moving it to an augmented PAKE

@@ -18,6 +18,7 @@ B="$HOME/trydesk-build"
 rm -rf "$B/src" "$B/assets" "$B/scripts" "$B/dist"
 mkdir -p "$B/scripts"
 cp -r "$SRC/src" "$SRC/assets" "$B/"
+rm -rf "$B/src/native"   # the Windows-only fast capture helper (Linux builds only view)
 cp "$SRC/scripts/after-pack.js" "$B/scripts/"
 cp "$SRC/package.json" "$SRC/package-lock.json" "$SRC/LICENSE" "$SRC/NOTICE" "$SRC/TRADEMARK.md" "$B/"
 cd "$B"

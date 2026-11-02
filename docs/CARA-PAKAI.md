@@ -83,7 +83,7 @@ Di Windows Sandbox dan VM Hyper-V, TryDesk otomatis berjalan tanpa akselerasi GP
 
 - **Kualitas** (panel kanan):
   - Preset: Hemat / Seimbang / Kualitas / Ultra / Gaming / Maksimal
-  - Slider **bitrate 1–1000 Mbps** (berubah langsung, tanpa sambung ulang)
+  - Slider **bitrate 1–1000 Mbps** (berubah langsung, tanpa sambung ulang). Sampai 300 Mbps berjalan di semua koneksi; di atas itu hanya lewat **jalur UDP** jalur cepat: PC Windows ke PC Windows di satu jaringan lokal (atau VPN), terbentuk sendiri saat keduanya saling terjangkau. Lewat internet atau relay, bitrate tetap berhenti di 300
   - Frame rate 30/60/120/144/165/180/240 (sampai 240 FPS; tergantung spek & refresh-rate PC), Resolusi Asli/1080p/720p/480p
   - Codec AV1/VP9/VP8/H.264 (ganti = renegosiasi sesaat)
   - Overlay statistik: bitrate, FPS, latency, packet loss, resolusi, jalur (P2P/relay), codec
@@ -93,9 +93,12 @@ Di Windows Sandbox dan VM Hyper-V, TryDesk otomatis berjalan tanpa akselerasi GP
 - **Audio**: dengarkan suara sistem PC remote (jika tersedia).
 - **Chat**: obrolan teks dua arah dalam sesi (juga dari layar host).
 - **Tombol**: kirim kombinasi — Alt+Tab, Win, Win+D, Win+E, Ctrl+Esc, Alt+F4, PrintScreen.*
-- **Screenshot**: ambil frame remote → simpan PNG.
+- **Screenshot**: ambil frame remote → simpan PNG (di Android: masuk galeri, Pictures/TryDesk).
 - **Lihat saja**: nonaktifkan kontrol (hanya menonton).
 - **Layar hitam** & **Kunci input**: privasi host saat maintenance. Kunci input butuh TryDesk host berjalan sebagai administrator dan selalu bisa dilepas dengan Ctrl+Alt+Del; keduanya ditolak bila host memakai mode lihat saja.
+  - Layar hitam menutup semua monitor (juga monitor yang dicolok saat sesi berjalan) dan tetap gelap bila koneksi putus sebentar: 20 detik, atau sampai Windows terkunci bila "Kunci layar Windows setelah sesi berakhir" aktif. Viewer yang tersambung ulang otomatis memintanya lagi.
+  - Host selalu menjawab: berhasil, ditolak (mode lihat saja), gagal (Windows 10 sebelum 2004 tidak bisa menyembunyikan penutup dari tangkapan layar), atau dilepas (pintasan Ctrl+Alt+Shift+Esc di host, atau izin kontrol dicabut).
+- **Suara & animasi tombol**: tombol utama memantul lembut saat ditekan dan berbunyi klik pelan. Matikan suaranya di Pengaturan → Umum → Efek suara; selama sesi remote berjalan suara selalu diam. Animasi mengikuti setelan "kurangi animasi" di Windows/Android.
 - **Rekam sesi**: pilih lokasi file dulu, lalu rekaman ditulis langsung ke disk (.webm) selama sesi berjalan.
 
 \* Ctrl+Alt+Del tidak ada di daftar: Windows menolak Ctrl+Alt+Del yang disuntik aplikasi (secure attention sequence).

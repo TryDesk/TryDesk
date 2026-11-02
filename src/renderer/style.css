@@ -193,8 +193,6 @@ body {
 .pw-eye { position: absolute; top: 0; right: 0; bottom: 0; width: 42px; display: inline-flex; align-items: center; justify-content: center; background: none; border: 0; border-radius: 0 9px 9px 0; color: var(--text-muted); cursor: pointer; transition: color 0.15s; }
 .pw-eye:hover, .pw-eye[aria-pressed="true"] { color: var(--text-primary); }
 .pw-eye:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; }
-.connect-pw-row .pw-field { flex: 1; min-width: 0; margin-top: 0; }
-.connect-pw-row .pw-field > .input-field { padding-right: 44px; }
 .toggle-pass-btn:hover { color: var(--accent); border-color: var(--accent); }
 
 .btn-connect { display: flex; align-items: center; justify-content: center; gap: 9px; width: 100%; padding: 14px; margin-top: 16px; background: var(--accent); border: none; border-radius: 11px; color: white; font-size: 15px; font-weight: 600; font-family: inherit; cursor: pointer; transition: all 0.2s; }
@@ -295,21 +293,32 @@ body {
 /* Access-password prompt (host asked again: no password typed, or a wrong one). While it is open the screen is just
    this form, like a sign-in page: the ring, the heading and the steps make way. */
 .connecting-container:has(.connect-pw:not(.hidden)) > :is(.connect-anim, #connecting-title, #connecting-text, .connect-steps) { display: none; }
-.connect-pw { width: 100%; max-width: 360px; padding: 22px 22px 18px; text-align: left; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-md); }
-.connecting-container .cpw-title { font-size: 17px; font-weight: 700; color: var(--text-primary); }
-.connecting-container .cpw-peer { margin-top: 4px; font-size: 13px; line-height: 1.5; color: var(--text-secondary); }
-.cpw-label { display: block; margin: 18px 0 6px; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+/* The service's host window (SYSTEM, see main.js): only the Accept dialog and the "being controlled" screen. No home
+   screen behind the dialog, no settings, no sending files; closing it only hides it. */
+html.svc-host #screen-home > *, html.svc-host #btn-settings, html.svc-host #btn-maximize, html.svc-host #btn-close,
+html.svc-host #btn-host-send-file { visibility: hidden; }
+html.svc-host #btn-host-send-file { display: none; }
+
+/* The PC being opened leads, drawn like its Recent tile in list view (preview, name, ID); then one field and one
+   full-width button, the same red button as Connect on the home screen. */
+.connect-pw { width: 100%; max-width: 380px; padding: 20px; text-align: left; background: var(--bg-secondary); border: 1px solid var(--border); border-radius: var(--radius-md); }
+.cpw-peer { display: flex; align-items: center; gap: 12px; padding-bottom: 16px; margin-bottom: 18px; border-bottom: 1px solid var(--border-subtle); }
+.cpw-peer .tile-preview { width: 72px; height: 41px; aspect-ratio: auto; flex: none; border: 1px solid var(--border-subtle); border-radius: 6px; }
+.cpw-peer .tile-preview svg { width: 20px; height: 20px; }
+.cpw-peer-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.cpw-peer-name { font-size: 15px; font-weight: 700; color: var(--text-primary); font-variant-numeric: tabular-nums; letter-spacing: 0.3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cpw-peer-id { font-size: 12.5px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.cpw-title { display: block; font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.connect-pw .pw-field { margin-top: 8px; }
+.connect-pw .input-field { background: var(--bg-primary); }
 .connecting-container .connect-pw-msg { margin-top: 8px; font-size: 12.5px; line-height: 1.5; color: var(--text-secondary); }
 .connecting-container .connect-pw-msg.warn { color: var(--warning); }
 .connect-pw-msg:empty { display: none; }
-.connecting-container .cpw-wait { display: flex; align-items: flex-start; gap: 9px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--border); font-size: 12.5px; line-height: 1.5; color: var(--text-muted); }
-.cpw-spin { flex: none; width: 12px; height: 12px; margin-top: 3px; border-radius: 50%; border: 1.5px solid var(--border); border-top-color: var(--text-secondary); animation: ring-spin 1s linear infinite; }
-@media (prefers-reduced-motion: reduce) { .cpw-spin { animation: none; } }
-.connect-pw-row { display: flex; gap: 8px; }
-.connect-pw-row .input-field { flex: 1; min-width: 0; margin-top: 0; background: var(--bg-primary); padding: 10px 12px; }
-.btn-pw { padding: 0 16px; background: var(--accent); border: none; border-radius: 9px; color: #fff; font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; transition: background 0.15s; }
-.btn-pw:hover { background: var(--accent-hover); }
-.btn-pw:disabled { opacity: 0.6; cursor: default; }
+.cpw-go { margin-top: 14px; }
+.cpw-go:disabled { opacity: 0.6; cursor: default; }
+.connecting-container .cpw-wait { margin-top: 12px; font-size: 12.5px; line-height: 1.5; color: var(--text-secondary); text-align: center; }
+/* Cancel reads as a quiet link under the form. */
+.connecting-container:has(.connect-pw:not(.hidden)) .btn-cancel { margin-top: 0; padding: 8px 16px; border-color: transparent; }
 .back-pill { position: fixed; left: 50%; bottom: 100px; transform: translateX(-50%); z-index: 60; display: flex; align-items: center; gap: 8px; padding: 9px 16px 9px 13px; background: var(--bg-elevated); border: 1px solid var(--border); border-radius: 999px; color: var(--text-primary); font-family: inherit; font-size: 13px; font-weight: 600; cursor: pointer; box-shadow: var(--shadow-md); transition: border-color 0.15s, background 0.15s; }
 .back-pill:hover { border-color: var(--accent); background: var(--bg-hover); }
 .back-pill svg { color: var(--accent); flex-shrink: 0; }
@@ -689,6 +698,18 @@ html[lang="en"] .help-id, html:not([lang="en"]) .help-en { display: none; }
 /* ── Session recording indicator ── */
 #rec-indicator { position: fixed; top: 52px; right: 16px; z-index: 130; display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; background: rgba(239,68,68,0.16); border: 1px solid #ef4444; color: #ef4444; font-size: 11px; font-weight: 800; letter-spacing: 1.5px; border-radius: 999px; cursor: pointer; backdrop-filter: blur(6px); box-shadow: 0 6px 20px rgba(239,68,68,0.25); }
 #rec-indicator:hover { background: rgba(239,68,68,0.26); }
+
+/* The spring press (app.js) writes `scale` every frame; their `transition: all` would smooth each step away and
+   flatten the overshoot, so these buttons transition everything except scale. */
+.view-btn, .btn-cancel, .btn-host-disconnect, .btn-accept-main, .btn-reject-main { transition-property: background, background-color, border-color, box-shadow, color, transform, opacity; }
+
+/* Reduced motion (a system setting): menus, dialogs and tabs appear without sliding or popping, and tiles and the
+   connect button don't lift. Spinners and the live dot keep moving, because they show that something is happening.
+   The spring press on the main buttons (app.js) checks the same setting. */
+@media (prefers-reduced-motion: reduce) {
+  .control-center, .monitor-menu, .cc-flyout, .tile-menu, .accept-card, .settings-panel, .settings-tab-content { animation: none; }
+  .recent-tile, .recent-tile:hover, .btn-connect, .btn-connect:hover { transition: none; transform: none; }
+}
 #rec-indicator .rec-dot { width: 8px; height: 8px; border-radius: 50%; background: #ef4444; animation: rec-blink 1s steps(2, start) infinite; }
 @keyframes rec-blink { 0%,100% { opacity: 1; } 50% { opacity: 0.2; } }
 
