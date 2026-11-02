@@ -1,0 +1,60 @@
+# Dependencies
+node_modules/
+
+# Build output (electron-builder)
+dist/
+dist-linux/
+dist-mac/
+*.AppImage
+*.deb
+*.exe
+*.blockmap
+builder-debug.yml
+builder-effective-config.yaml
+
+# Secrets / local env (commit the *.example templates instead)
+.env
+.env.*
+!.env.example
+deploy/.env
+.npmrc
+.git-credentials
+*.ppk
+id_rsa*
+id_ed25519*
+android-signing.properties
+# Owner-only server tools and config (never public)
+owner-private/
+docker-compose.override.yml
+owner-tools.js
+*.pem
+*.key
+# Code-signing certificates — never commit
+*.pfx
+*.p12
+*.cer
+
+# Android app (mobile/): generated web bundle + Android build output; the release key never lives in the repo
+mobile/www/
+*.apk
+*.aab
+*.jks
+*.keystore
+
+# Release outputs (buat-rilis.ps1): rilis/filezilla-website = the site to upload, source zips and code browser included
+rilis/
+
+# Logs, runtime flags & caches
+*.log
+*.flag
+.cache/
+.electron-builder-cache/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+*.swp
+.vscode/
+.idea/
+.claude/

@@ -16,6 +16,13 @@ those copies stay MIT. TryDesk 1.2.0 and later are released under AGPL-3.0-only.
 The "TryDesk" name and logo are trademarks of DrWeabo and are NOT covered by the
 licence above. See TRADEMARK.md before publishing a modified version.
 
+Sound effects (assets/sfx), both dedicated to the public domain (CC0 1.0) and
+taken from Remotion's sound-effect collection (https://www.remotion.dev/docs/sfx),
+shortened and converted to mono:
+  click.wav  - "Mouse Click Sound" by Pixeliota, https://freesound.org/s/678248/
+  switch.wav - "UI Audio - Switch 35" by Kenney, https://kenney.nl
+Credit is not required by CC0; it is given here anyway.
+
 If you redistribute TryDesk or a modified version, keep this NOTICE file, the
 LICENSE file and the copyright notices in the program (including the
 "Made by DrWeabo" credit in the About screen).

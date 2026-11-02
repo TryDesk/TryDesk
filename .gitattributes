@@ -1,0 +1,14 @@
+# Normalize line endings: text files use LF in the repo
+* text=auto eol=lf
+
+# Keep Windows batch/PowerShell scripts as CRLF
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Treat binaries as binary (no diff / no EOL conversion)
+*.exe binary
+*.ico binary
+*.png binary
+*.jpg binary
+*.webp binary
+*.pdf binary

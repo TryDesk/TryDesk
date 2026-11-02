@@ -55,7 +55,11 @@ If you're new to programming, the friendliest place to read code first is
 - **Two-pane file manager** — browse local & remote folders, transfer both ways
 - **Chat** — in-session messaging with in-app and native notifications
 - **Clipboard sync & audio** — shared clipboard and remote audio
-- **Privacy** — blank the host screen and lock its input during a session
+- **Privacy** — blank the host screen and lock its input during a session. The black cover spans every monitor
+  (also one plugged in mid-session), stays through a short connection drop, and is refused with a message when
+  Windows can't hide it from screen capture (Windows 10 before 2004)
+- **Button feel** — the main buttons spring under a press and make a quiet click (CC0 sounds, see NOTICE); no
+  motion when the system asks for reduced motion, no sound during a session, and a switch in Settings
 - **Access control** — per-device IDs (regenerate anytime for security), an optional connection password
   (wrong answers are throttled per requester; no password still gets the normal Accept prompt), and host-side
   permissions for control / files / clipboard — view-only also blocks file and clipboard access
@@ -65,8 +69,9 @@ If you're new to programming, the friendliest place to read code first is
 - **Discord Rich Presence** — shows "Using TryDesk" on your Discord profile (silent if Discord isn't running; can be turned off)
 - **Dark & light themes**, full Indonesian / English UI (follows the Windows language until you pick one)
 - **Android app (viewer)** — control a Windows PC from your phone: touchpad or direct touch, two-finger
-  scroll / right click, pinch zoom, the phone keyboard (autocorrect + emoji) and a special-keys bar. The phone
-  controls PCs but can't be controlled itself. ~3 MB APK, Android 7.0+
+  scroll / right click, pinch zoom, the phone keyboard (autocorrect + emoji) and a special-keys bar, devices as a
+  grid or a list, screenshots and session recordings into the gallery. The phone controls PCs but can't be
+  controlled itself. ~3 MB APK, Android 7.0+
 - **Connect by IP on a LAN** — two devices on one network connect with no internet and no server: off by default,
   local addresses only, and only with an access password of at least 10 characters (see SECURITY.md)
 - **Update notice** — the app reads `https://trydesk.ai.id/version.json`: a newer release shows a dismissable notice;
@@ -224,6 +229,13 @@ Please keep the UI consistent with the existing design and test your changes in
 the app before submitting. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for a
 beginner-friendly walkthrough, and [`SECURITY.md`](SECURITY.md) to report a
 vulnerability privately.
+
+## Support the project
+
+TryDesk is free and has no ads or paid tier. If it's useful to you, a donation helps pay for the signaling and
+relay servers: [donate on SociaBuzz](https://sociabuzz.com/drweabo/tribe) (also linked from the **Sponsor** button
+above and the site's [Donate page](https://trydesk.ai.id/donate/)). Reporting bugs and sharing TryDesk helps just as
+much.
 
 ## License
 

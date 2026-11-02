@@ -1,6 +1,6 @@
 {
   "name": "trydesk",
-  "version": "1.3.1",
+  "version": "1.3.2",
   "description": "Free, open-source remote desktop (WebRTC P2P) for Windows, controllable from Windows, macOS, Linux and Android",
   "author": "DrWeabo (TryDesk)",
   "license": "AGPL-3.0-only",
@@ -51,7 +51,9 @@
       "assets/**/*",
       "node_modules/**/*",
       "!node_modules/koffi/build/koffi/{darwin_*,freebsd_*,linux_*,musl_*,openbsd_*,win32_arm64,win32_ia32}/**",
-      "!node_modules/koffi/{doc,src,vendor,lib}/**"
+      "!node_modules/koffi/{doc,src,vendor,lib}/**",
+      "!src/native/*.cpp",
+      "!src/native/*.obj"
     ],
     "extraFiles": [
       {
@@ -165,11 +167,13 @@
       "uninstallerIcon": "assets/icon.ico",
       "installerHeaderIcon": "assets/icon.ico",
       "deleteAppDataOnUninstall": false,
-      "differentialPackage": false
+      "differentialPackage": false,
+      "include": "scripts/installer.nsh"
     },
     "asar": true,
     "asarUnpack": [
-      "node_modules/koffi/**"
+      "node_modules/koffi/**",
+      "src/native/**"
     ]
   }
 }
