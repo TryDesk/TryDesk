@@ -36,6 +36,10 @@ strengthen these guarantees are especially welcome.
   - **Password sessions (1.3.3+):** the offer/answer that carries the DTLS fingerprints is signed with the
     access-password key on the internet ID path too (the LAN path has done this since 1.2.5), so the signaling
     server, or someone who has taken it over, can no longer swap the fingerprints and sit in the middle.
+    From 1.3.4 the host insists on the signature whenever the password was proven, whatever the server says.
+    Known limit: the viewer can't tell whether its own password was right (the owner may have clicked Accept for
+    a wrong one), so it takes an unsigned answer as such a plain session; a taken-over server could therefore
+    show the viewer a fake screen, but it still can't get into the host.
   - **Known limit (Accept-only sessions):** with no shared password there is nothing to sign with, so a taken-over
     server could still sit in the middle of a session that was let in by clicking Accept. A short code to compare
     on both screens is planned together with the PAKE work. Set an access password where this matters.

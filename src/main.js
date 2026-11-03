@@ -344,6 +344,9 @@ function createWindow() {
     minWidth: 700,
     minHeight: 500,
     frame: false,
+    // Shown once the page has loaded (did-finish-load): the service's host must never show an empty window on the
+    // user's desktop, and a --tray start stays in the tray.
+    show: false,
     backgroundColor: "#0a0a0f",
     icon: path.join(__dirname, "..", "assets", process.platform === "win32" ? "icon.ico" : "icon.png"),
     webPreferences: {
@@ -476,7 +479,12 @@ app.whenReady().then(async () => {
   app.on("activate", showMainWindow);
   try { createWindow(); logInfo("window created"); } catch (e) { logCrash("createWindow gagal", e); try { app.exit(1); } catch {} return; }
   // Watchdog: if the renderer never finishes loading, leave a breadcrumb (diagnose.ps1 reads it).
-  setTimeout(() => { if (!_windowReady) logInfo("WARNING: renderer not loaded after 15s"); }, 15000);
+  // The window waits for the page (show: false), so a page that never loads would leave nothing on screen: show it anyway.
+  setTimeout(() => {
+    if (_windowReady) return;
+    logInfo("WARNING: renderer not loaded after 15s");
+    if (!_serviceHost && !(_startInTray && tray)) { try { mainWindow.show(); } catch {} }
+  }, 15000);
   // On a GPU-process crash, self-heal: remember to disable acceleration and relaunch once, so a bad
   // GPU/driver on a client PC no longer leaves a blank/missing window.
   let _gpuRelaunched = false;

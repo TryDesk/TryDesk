@@ -244,8 +244,10 @@ function register(ws, msg) {
       if (!live.has(peer)) { removePair(id, peer); sendTo(peer, { type: "peer-disconnected", fromId: id }); }
     }
   }
-  // sdpMac: this server relays the "mac" on offer/answer, so 1.3.3+ hosts may insist on it for password sessions.
-  send(ws, { type: "registered", clientId: id, token: finalToken, iceServers: turnServers(id), sdpMac: true });
+  // sdpMac is no longer announced (3 Nov 2026): 1.3.3 viewers demanded a signed answer once it was, and 1.3.3 hosts
+  // never sign one, so every 1.3.3 password session hung. While it is absent 1.3.3 takes an unsigned answer; 1.3.4+
+  // ignores the flag (its hosts always require the signature once the password is proven). "mac" is still relayed.
+  send(ws, { type: "registered", clientId: id, token: finalToken, iceServers: turnServers(id) });
   ws.ver = clientVersion(ws, msg);
   const lang = msg.app && typeof msg.app === "object" ? msg.app.lang : "";
   ws.lang = lang === "id" || lang === "en" ? lang : "";

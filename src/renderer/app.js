@@ -367,6 +367,8 @@ const TEXT_EN = {
   "Layanan belum terpasang.": "Service not installed.",
   "Isi password akses dulu (minimal satu kali disimpan), lalu pasang layanan.": "Set an access password first, then install the service.",
   "Memasang layanan… setujui prompt UAC.": "Installing the service… approve the UAC prompt.",
+  "Menyimpan password ke layanan… setujui prompt UAC.": "Saving the password to the service… approve the UAC prompt.",
+  "Password layanan diperbarui": "Service password updated",
   "Layanan terpasang. ID layanan muncul dalam beberapa detik.": "Service installed. Its ID appears in a few seconds.",
   "UAC dibatalkan — layanan tidak dipasang": "UAC cancelled — service not installed",
   "UAC dibatalkan — layanan tetap terpasang": "UAC cancelled — service still installed",
@@ -1162,12 +1164,16 @@ function sendSignal(data) {
   if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(data));
 }
 // A password session: the SDP must carry a valid signature. Without a key (manual Accept) nothing can be checked.
-// A server from before 1.3.3 drops the signature on the way (it relays only offer/answer/candidate); it says so by
-// not announcing sdpMac when registering, and only then is a missing signature let through (never a wrong one).
-let serverSdpMac = false;
+// The viewer can't tell whether its password was right: the host's owner may have clicked Accept for a wrong or
+// empty one, and such a host has no key to sign with. So on the ID path an UNSIGNED answer is taken as that plain
+// session; a signed one must be right. The host always insists on a signed offer once the password was proven
+// (every TryDesk the server still lets in, 1.3.3+, signs it), which is what stops a taken-over server from sitting
+// between the two: it can't sign an offer of its own. (1.3.3 relaxed this when the server didn't announce sdpMac,
+// which a taken-over server could simply leave out.)
+let serverSdpMac = false;   // kept for the log only: what the server says no longer changes any check
 async function sdpMacOk(s, kind, desc, mac) {
   if (!s || !s.lanKey) return true;
-  if (mac === undefined && !serverSdpMac && !isLanId(s.peerId)) { sessLog(s, `${kind} unsigned: the server does not relay signatures yet`); return true; }
+  if (mac === undefined && kind === "answer" && s.role === "viewer" && !isLanId(s.peerId)) { sessLog(s, "answer unsigned: the host let this session in without the password"); return true; }
   return typeof desc === "object" && !!desc && _constEq(String(mac || "").slice(0, 128), await lanMac(s.lanKey, kind, desc));
 }
 
@@ -1262,7 +1268,8 @@ async function onLanEvent(ev) {
         const d = desc(m.offer);
         if (!d || !host || host.peerId !== id || !host.lanKey) return;
         if (!_constEq(str(m.mac, 128), await lanMac(host.lanKey, "offer", d))) { sessLog(host, "LAN offer with a bad signature ignored"); return; }
-        return onSignal({ type: "offer", fromId: id, offer: d });
+        // The signature goes along: onSignal checks every signed session's SDP again (a missing one is refused there).
+        return onSignal({ type: "offer", fromId: id, offer: d, mac: str(m.mac, 128) });
       }
       case "ice-candidate": { const c = cand(m.candidate); if (c && host && host.peerId === id) onSignal({ type: "ice-candidate", fromId: id, candidate: c }); return; }
       case "disconnect": return onSignal({ type: "peer-disconnected", fromId: id, ...(m.bye ? { bye: true, reason: str(m.reason, 120) } : {}) });
@@ -1294,7 +1301,7 @@ async function onLanEvent(ev) {
       const d = desc(m.answer), s = sessions.get(id);
       if (!d || !s || !s.lanKey) return;
       if (!_constEq(str(m.mac, 128), await lanMac(s.lanKey, "answer", d))) { sessLog(s, "LAN answer with a bad signature ignored"); return; }
-      return onSignal({ type: "answer", fromId: id, answer: d });
+      return onSignal({ type: "answer", fromId: id, answer: d, mac: str(m.mac, 128) });
     }
     case "ice-candidate": { const c = cand(m.candidate); if (c) onSignal({ type: "ice-candidate", fromId: id, candidate: c }); return; }
     case "disconnect": lanDrop(id); return onSignal({ type: "peer-disconnected", fromId: id, ...(m.bye ? { bye: true, reason: str(m.reason, 120) } : {}) });
@@ -1811,7 +1818,8 @@ function pwFailed(id) {
 
 async function handleIncoming(msg) {
   // With the service running, the service's host answers for this PC under its ID; this app only controls others.
-  if (svcId !== null) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: svcId ? `PC ini memakai layanan TryDesk. Sambung ke ID ${svcId}` : "PC ini memakai layanan TryDesk" }); return; }
+  // A LAN request still lands here: the service's host doesn't listen on the LAN port, this app does (password only).
+  if (svcId !== null && !lanIn(msg.fromId)) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: svcId ? `PC ini memakai layanan TryDesk. Sambung ke ID ${svcId}` : "PC ini memakai layanan TryDesk" }); return; }
   if (updateRequired) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: "PC tujuan memakai versi TryDesk lama yang wajib diperbarui" }); return; }
   // The macOS and Linux builds can control other PCs but can't be controlled (screen capture + input are Windows code).
   if (viewerOnlyDesktop()) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: isMacViewer() ? "Perangkat ini memakai TryDesk untuk macOS, yang hanya bisa mengontrol PC Windows" : "PC ini memakai TryDesk untuk Linux, yang saat ini hanya bisa mengontrol PC lain" }); return; }
@@ -1894,9 +1902,10 @@ async function handleChallengeResponse(msg) {
   }
   if (!empty && expected && _constEq(response, expected)) {
     pwFail.delete(pwKey(pc.fromId));
+    pc.pwOk = true;   // the viewer holds the password key: this session signs its offer/answer (see finishAccept)
     if (!autoAcceptWithPassword) { if (!pc.settle) askOwner(pc, PW_HINT.okManual); return; }
     if (pc.settle) pc.settle(true);
-    else { pendingChallenge = null; await finishAccept(pc.fromId); }
+    else { pendingChallenge = null; await finishAccept(pc.fromId, true); }
     return;
   }
   if (!empty) {
@@ -1943,7 +1952,8 @@ async function askOwner(pc, hint) {
   const ok = await asked;
   if (!reason) reason = declineReason();
   if (pendingChallenge === pc) pendingChallenge = null;
-  if (ok) await finishAccept(pc.fromId, true);
+  // Signed only when the password was proven; the owner clicking Accept for an empty or wrong one is a plain session.
+  if (ok) await finishAccept(pc.fromId, !!pc.pwOk);
   else sendSignal({ type: "connection-rejected", targetId: pc.fromId, reason });
 }
 
@@ -2945,7 +2955,7 @@ function sendBye(sess, reason = "") {
 // peer could write "TryDesk: akun diblokir, hubungi WA ...". Every reason TryDesk sends is a fixed text that also
 // sits in TEXT_EN (it gets translated), so that list is the allow-list; anything else shows the plain fallback.
 // One reason carries a number (the LAN password length), so it is matched by its exact shape instead.
-const KNOWN_PEER_REASON = /^PC tujuan perlu password akses minimal \d{1,2} karakter untuk koneksi lewat IP$/;
+const KNOWN_PEER_REASON = /^(PC tujuan perlu password akses minimal \d{1,2} karakter untuk koneksi lewat IP|PC ini memakai layanan TryDesk\. Sambung ke ID \d{3} \d{3} \d{3})$/;
 function knownPeerText(reason, fallback) {
   const r = typeof reason === "string" ? reason.trim() : "";
   return r && (Object.prototype.hasOwnProperty.call(TEXT_EN, r) || KNOWN_PEER_REASON.test(r)) ? r : fallback;
@@ -5657,8 +5667,10 @@ $("#btn-clear-pass").addEventListener("click", () => {
 // The service's host answers for this PC while it runs: the password goes to it too (one UAC prompt).
 async function syncServicePassword(hash) {
   if (svcId === null) return;
+  showToast("Menyimpan password ke layanan… setujui prompt UAC.");
   let r; try { r = await window.electronAPI.serviceSetPassword(hash || ""); } catch { r = { ok: false, code: 1 }; }
-  if (!r.ok) showToast(r.code === 1223 ? "UAC dibatalkan — password layanan tidak berubah" : tr("Password layanan gagal diubah") + ` (${r.code})`);
+  if (r.ok) showToast("Password layanan diperbarui");
+  else showToast(r.code === 1223 ? "UAC dibatalkan — password layanan tidak berubah" : tr("Password layanan gagal diubah") + ` (${r.code})`);
 }
 accessPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") accessPassword.blur(); });
 accessPassword.addEventListener("change", async () => {
