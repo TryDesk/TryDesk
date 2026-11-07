@@ -349,7 +349,7 @@ const TEXT_EN = {
   "Cara PC ini": "How this PC", "tersambung.": "connects.",
   "Siapa yang boleh": "Who may", "masuk.": "come in.",
   "Gambar dan": "Picture and", "tema.": "theme.",
-  "Suara dari PC": "Sound from the", "remote.": "remote PC.",
+  "Suara dari PC": "Sound from the PC", "remote.": "remote PC.",
   "Data, rendering, dan": "Data, rendering and", "versi.": "version.",
   // General
   "Alias perangkat": "Device alias", "Simpan": "Save",
@@ -5620,7 +5620,7 @@ function ccShowKeyMenu() {
   // In full screen the session bar is away: the menu opens above the dock instead of under Control Center.
   if (document.documentElement.classList.contains("fs-session")) return fsMenuAbove($("#key-menu"), $("#fsd-keys"));
   const menu = $("#key-menu"); const a = $("#btn-control-center").getBoundingClientRect();
-  menu.classList.remove("hidden");
+  menu.classList.remove("hidden"); menu.style.maxHeight = "";
   menu.style.top = `${a.bottom + 8}px`;
   menu.style.left = `${Math.max(8, Math.min(a.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8))}px`;
 }
@@ -5686,14 +5686,16 @@ function ccItems(cat) {
         { label: "Kunci input host", active: !!sess && sess.inputLocked, run: toggleLockInput },
       ];
     case "more":
+      // Two groups (owner, 7 Nov: the mixed list looked untidy): the four things that open something, then the
+      // four on/off switches. One line between the groups, none between rows.
       return [
-        { label: _gameActive ? "Mode game: AKTIF (klik mematikan)" : "Mode game (mouse)", active: _gameActive, close: true, run: toggleGameMode },
         { label: "Transfer file", close: true, run: openFileManager },
         { label: "Chat", close: true, run: toggleChat },
         { label: "Kombinasi tombol", close: true, run: ccShowKeyMenu },
         { label: "Ambil screenshot", close: true, run: takeScreenshot },
-        { label: isRecording() ? "Hentikan rekaman" : "Rekam sesi", active: isRecording(), run: toggleRecording },
         { divider: true },
+        { label: _gameActive ? "Mode game: AKTIF (klik mematikan)" : "Mode game (mouse)", active: _gameActive, close: true, run: toggleGameMode },
+        { label: isRecording() ? "Hentikan rekaman" : "Rekam sesi", active: isRecording(), run: toggleRecording },
         { label: "Tampilkan statistik", active: ccStatsShown(), run: ccToggleStats },
         { label: "Sinkron clipboard", active: clipboardSync, run: ccToggleClipboard },
       ];
@@ -5720,6 +5722,7 @@ const ccDockMode = () => !isPhoneUi() && !document.documentElement.classList.con
 function ccSetDocked(on) {
   ccDocked = !!on && ccDockMode();
   const cc = $("#control-center");
+  cc.style.maxHeight = "";   // the full-screen limit (fsMenuAbove) must not follow the panel into the docked place
   // Leaving: keep the docked look until the panel has slid out (it used to turn into the floating menu for 140 ms).
   const leavingDocked = !ccDocked && cc.classList.contains("cc-panel-docked") && !cc.classList.contains("hidden") && !motionOff();
   if (!leavingDocked) cc.classList.toggle("cc-panel-docked", ccDocked);
@@ -5782,7 +5785,7 @@ function ccRender() {
     }
     cc.appendChild(el("div", "cc-divider"));
     const fs = el("button", "cc-leaf cc-fs-leaf"); fs.type = "button";
-    fs.innerHTML = `${ccSvg(CC_ICON.window, 15)}<span></span>`; fs.lastChild.textContent = document.fullscreenElement ? "Keluar layar penuh" : "Layar penuh";
+    fs.innerHTML = `${ccSvg(CC_ICON.window)}<span></span>`; fs.lastChild.textContent = document.fullscreenElement ? "Keluar layar penuh" : "Layar penuh";
     fs.addEventListener("click", (e) => { e.stopPropagation(); $("#btn-fullscreen").click(); if (!ccDocked) ccClose(); });
     cc.appendChild(fs);
   } else {
@@ -5804,12 +5807,21 @@ function ccRender() {
       const SW = { "Mode lihat saja": 1, "Gelapkan layar host": 1, "Kunci input host": 1, "Tampilkan statistik": 1, "Sinkron clipboard": 1 };
       let swLabel = null;
       if (SW[it.label]) swLabel = it.label;
-      else if (/^Mode game/.test(it.label)) swLabel = "Mode game (mouse relatif)";
+      else if (/^Mode game/.test(it.label)) swLabel = "Mode game";   // "(mouse relatif)" broke the row in two at 288 px
       else if (/^(Rekam sesi|Hentikan rekaman)$/.test(it.label)) swLabel = "Rekam sesi";
       else if (/audio remote$/.test(it.label)) swLabel = "Suara dari PC";
       if (swLabel) {
+        // Every row in the panel is drawn on the list's grid: a 16 px icon, the name at the same left edge as the
+        // category names, the switch where the list has its arrow.
+        const SWI = { "Mode lihat saja": `<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/>`,
+          "Gelapkan layar host": `<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>`,
+          "Kunci input host": `<rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>`,
+          "Tampilkan statistik": `<path d="M5 20V11M12 20V5M19 20v-6"/>`,
+          "Sinkron clipboard": `<rect x="8" y="3" width="8" height="4" rx="1"/><path d="M16 5h2a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2"/>`,
+          "Mode game": `<rect x="2" y="7" width="20" height="11" rx="4"/><path d="M7 12.5h4M9 10.5v4M15.5 12h.01M18 14h.01"/>`,
+          "Rekam sesi": `<circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3"/>`, "Suara dari PC": CC_ICON.sound };
         const b = el("button", "ccp-switch"); b.type = "button"; b.setAttribute("role", "switch"); b.setAttribute("aria-checked", String(!!it.active));
-        b.innerHTML = `<span></span><i class="ccp-tog${it.active ? " on" : ""}"></i>`; b.firstChild.textContent = swLabel;
+        b.innerHTML = `${ccSvg(SWI[swLabel] || "")}<span></span><i class="ccp-tog${it.active ? " on" : ""}"></i>`; b.querySelector("span").textContent = swLabel;
         if (it.disabled) b.disabled = true;
         else b.addEventListener("click", (e) => { e.stopPropagation(); if (it.run) it.run(); ccRender(); ccSyncStats(); });
         cc.appendChild(b); continue;
@@ -5819,7 +5831,7 @@ function ccRender() {
         "Ambil screenshot": `<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>` };
       const b = el("button", "cc-leaf" + (it.active ? " active" : "") + (ACT[it.label] ? " cc-act" : "")); b.type = "button";
       if (it.disabled) b.disabled = true;
-      b.innerHTML = ACT[it.label] ? `${ccSvg(ACT[it.label], 15)}<span></span>` : `<span class="cc-leaf-check">${it.active ? CC_CHECK : ""}</span><span></span>`; b.lastChild.textContent = it.label;
+      b.innerHTML = ACT[it.label] ? `${ccSvg(ACT[it.label])}<span></span>` :`<span class="cc-leaf-check">${it.active ? CC_CHECK : ""}</span><span></span>`; b.lastChild.textContent = it.label;
       if (!it.disabled) b.addEventListener("click", (e) => {
         e.stopPropagation();
         if (it.run) it.run();
@@ -5829,6 +5841,7 @@ function ccRender() {
     }
   }
   cc.scrollTop = keepScroll;
+  if (document.documentElement.classList.contains("fs-session") && !cc.classList.contains("hidden") && !isPhoneUi()) fsMenuAbove(cc, $("#fsd-menu"));
 }
 function ccOpenAdvanced() {
   qualityPanel.classList.remove("hidden");
@@ -5943,9 +5956,12 @@ function fsDockWake() {
     if (busy) fsDockWake(); else dock.classList.add("hidden");
   }, 2000);
 }
+// The menu sits above the dock and grows upwards: never taller than the room above the dock (it scrolls inside
+// instead), and placed again whenever its content changes (a category used to grow down under the dock, 7 Nov).
 function fsMenuAbove(menu, btn) {
   menu.classList.remove("hidden");
   const r = btn.getBoundingClientRect();
+  menu.style.maxHeight = `${Math.max(160, Math.round(r.top - 18))}px`;
   menu.style.top = `${Math.max(8, r.top - menu.offsetHeight - 10)}px`;
   menu.style.left = `${Math.round(Math.min(Math.max(8, r.left + r.width / 2 - menu.offsetWidth / 2), window.innerWidth - menu.offsetWidth - 8))}px`;
 }

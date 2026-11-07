@@ -1684,6 +1684,8 @@ html:not(.td-mobile) .session-bar .sb-disconnect:hover { background: var(--bg-ho
 .control-center.cc-panel.cc-panel-docked { top: 34px !important; width: 288px; padding: 22px; }
 #screen-remote.cc-docked .remote-stage { margin-right: 288px; }
 html:not(.td-mobile) #screen-remote .quality-panel { top: 34px; width: 288px; background: var(--bg-primary); }
+/* Full screen has no session bar, so nothing to sit under (it left an empty 34 px strip at the top, 7 Nov). */
+html.fs-session:not(.td-mobile) #screen-remote .quality-panel { top: 0; }
 html:not(.td-mobile) body:has(#screen-remote:not(.hidden)) .chat-panel, html:not(.td-mobile) body:has(#screen-remote:not(.hidden)) #overlay-files { top: 34px; }
 .control-center.cc-panel .ccp-title { font-size: 24px; }
 .control-center.cc-panel .cc-stats { margin: 20px 0 10px; padding: 0 0 20px; }
@@ -1693,10 +1695,22 @@ html:not(.td-mobile) body:has(#screen-remote:not(.hidden)) .chat-panel, html:not
 .ccp-tog::after { top: 3px; left: 3px; width: 14px; height: 14px; }
 .ccp-tog.on { background: var(--accent-fill); }
 .ccp-tog.on::after { transform: translateX(14px); }
-.control-center.cc-panel .ccp-subtitle + .ccp-switch, .control-center.cc-panel .cc-flyout-header + .ccp-switch { border-top: 1px solid var(--border); }
-.control-center.cc-panel .ccp-switch { padding: 0 2px; }
-.control-center.cc-panel .cc-leaf.cc-act { gap: 10px; padding-left: 2px; }
-.control-center.cc-panel .cc-leaf.cc-act svg { color: var(--text-secondary); flex: none; }
+/* One grid for every row in the panel (owner, 7 Nov: Fitur lainnya had four left edges and a line under some rows
+   only): the mark (icon, check or nothing) in a 16 px column 8 px in, the name 35 px in, like the category list; the
+   switch or arrow 8 px from the right. Rows carry no lines of their own; one line separates groups (.cc-divider). */
+.control-center.cc-panel .ccp-switch { gap: 11px; border: 0; border-radius: 8px; }
+.control-center.cc-panel .ccp-switch:hover:not(:disabled) { background: var(--bg-hover); }
+.control-center.cc-panel .ccp-switch > span { flex: 1; min-width: 0; }
+.control-center.cc-panel .ccp-switch > svg, .control-center.cc-panel .cc-leaf.cc-act > svg { flex: none; color: var(--text-secondary); }
+.control-center.cc-panel .ccp-switch:hover:not(:disabled) > svg, .control-center.cc-panel .cc-leaf.cc-act:hover > svg { color: var(--text-primary); }
+.control-center.cc-panel .cc-leaf-check { width: 16px; justify-content: center; }
+html:not(.td-mobile) .control-center.cc-panel .ccp-switch { min-height: 38px; padding: 0 8px; }
+html:not(.td-mobile) .control-center.cc-panel .cc-leaf { padding: 0 8px; gap: 11px; }
+html:not(.td-mobile) .control-center.cc-panel .cc-flyout-slider { min-height: 38px; padding: 0 8px 0 35px; gap: 12px; font-size: 13px; }
+/* The phone keeps its 14 px row inset and taller rows (touch); its switches line up with the rows around them. */
+html.td-mobile .control-center.cc-panel .ccp-switch { min-height: 46px; padding: 0 14px; font-size: 14.5px; }
+/* A long list (Kualitas gambar) scrolls: a thin quiet bar instead of the 15 px system one cutting the rounded edge. */
+.control-center.cc-panel { scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent; }
 
 /* ═══ Owner round 4 (6 Nov night): every desktop screen MEASURED (32 screens, text + controls + focus + 700 × 500).
    One type scale (13 body, 12 notes, 28 page titles), fields 40 px, buttons 34 px, radius 10 (small icon buttons 8),
