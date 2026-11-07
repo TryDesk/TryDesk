@@ -1,4 +1,4 @@
-// TryDesk for Android — the phone layer on top of the unchanged desktop renderer (loaded AFTER app.js).
+// TryDesk for Android, the phone layer on top of the unchanged desktop renderer (loaded AFTER app.js).
 // app.js keeps doing signaling, WebRTC, quality, monitors, chat and i18n. This file only:
 //   • makes the phone a viewer (incoming requests are refused, host-only UI is hidden),
 //   • turns touch into mouse input (touchpad or direct-touch mode, pinch zoom, two-finger scroll / right click),
@@ -14,18 +14,18 @@
 
   // ── English for the strings this layer adds (the desktop i18n observer translates DOM text) ──
   Object.assign(TEXT_EN, {
-    "Online — siap menghubungkan ke PC": "Online — ready to connect to a PC",
+    "Online, siap menghubungkan ke PC": "Online, ready to connect to a PC",
     "Keyboard": "Keyboard", "Tombol khusus": "Special keys", "Mode sentuh": "Touch mode", "Menu": "Menu",
     "Mode sentuh: touchpad": "Touch mode: touchpad", "Mode sentuh: sentuh langsung": "Touch mode: direct touch",
-    "Touchpad — geser untuk menggerakkan kursor, ketuk untuk klik": "Touchpad — slide to move the cursor, tap to click",
-    "Sentuh langsung — ketuk tepat di tempat yang mau diklik": "Direct touch — tap exactly where you want to click",
+    "Touchpad, geser untuk menggerakkan kursor, ketuk untuk klik": "Touchpad, slide to move the cursor, tap to click",
+    "Sentuh langsung, ketuk tepat di tempat yang mau diklik": "Direct touch, tap exactly where you want to click",
     "Pas layar (reset zoom)": "Fit screen (reset zoom)", "Sembunyikan toolbar": "Hide toolbar", "Tampilkan toolbar": "Show toolbar",
     "Putar HP ke landscape untuk tampilan lebih besar": "Rotate your phone to landscape for a bigger view",
     "Putar layar": "Rotate screen", "Layar dikunci landscape": "Screen locked to landscape", "Layar mengikuti posisi HP": "Screen follows the phone's position",
     "Putuskan koneksi ke PC ini?": "Disconnect from this PC?",
     "Ketuk = klik · tahan lalu geser = seret · 2 jari = scroll · ketuk 2 jari = klik kanan · cubit = zoom":
       "Tap = click · hold then slide = drag · 2 fingers = scroll · 2-finger tap = right click · pinch = zoom",
-    "Hubungkan ke PC Windows yang menjalankan TryDesk": "Connect to a Windows PC running TryDesk",
+    "Hubungkan ke PC Windows yang menjalankan TryDesk.": "Connect to a Windows PC running TryDesk.",
     "Aplikasi HP ini hanya untuk mengontrol PC. Untuk dikontrol dari jauh, pasang TryDesk di PC Windows.":
       "This phone app only controls PCs. To be controlled remotely, install TryDesk on a Windows PC.",
     "Runtime": "Runtime",
@@ -33,6 +33,8 @@
     "Mode game": "Game mode", "Mode game mati": "Game mode off", "Klik kiri": "Left click", "Klik kanan": "Right click",
     "Mode game: geser = arahkan kamera · ketuk = klik · tahan = tahan klik · ketuk 2 jari = klik kanan":
       "Game mode: slide = look around · tap = click · hold = hold click · 2-finger tap = right click",
+    "Sentuh": "Touch", "Game": "Game", "Putar": "Rotate",
+    "Papan angka": "Number pad", "Hapus angka (tahan untuk menghapus semua)": "Delete digit (hold to clear)", "Titik (alamat IP)": "Dot (IP address)",
   });
 
   // ── Viewer only: a phone never shares its own screen ──
@@ -40,7 +42,7 @@
     sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: "Perangkat ini adalah TryDesk untuk HP (hanya mengontrol PC) dan tidak bisa dikontrol" });
   };
   const _setStatus = setStatus;
-  setStatus = (state, text) => _setStatus(state, text === "Online — siap menerima koneksi" ? "Online — siap menghubungkan ke PC" : text);
+  setStatus = (state, text) => _setStatus(state, text === "Online, siap menerima koneksi" ? "Online, siap menghubungkan ke PC" : text);
 
   // Pinch zoom replaces the desktop scale presets: the remote always starts fitted to the phone.
   const _prefGet = prefGet;
@@ -55,13 +57,14 @@
     "#setting-bw-limit", "#setting-prevent-sleep", "#setting-default-scale", "#setting-hw-accel"];
   for (const sel of HIDE_GROUPS) { const g = $(sel)?.closest(".setting-group"); if (g) g.classList.add("m-hide"); }
   $('.stab[data-tab="tab-security"]')?.classList.add("m-hide");
+  $('.stab[data-tab="tab-service"]')?.classList.add("m-hide");
   // Clipboard sync only runs PC → phone here (Android gives the page no clipboard read), and the Control Center
   // already leaves it out; the quality panel's switch for it went too, so neither place offers a half feature.
   $("#clipboard-toggle")?.closest(".qp-group")?.classList.add("m-hide");
   $$(".about-row").forEach((r) => { const b = r.querySelector("b"); if (b && /Electron/.test(b.textContent)) b.textContent = "Android WebView + WebRTC"; });
   const note = $(".connect-section");
   if (note) {
-    const lead = document.createElement("p"); lead.className = "m-lead"; lead.textContent = "Hubungkan ke PC Windows yang menjalankan TryDesk";
+    const lead = document.createElement("p"); lead.className = "m-lead"; lead.textContent = "Hubungkan ke PC Windows yang menjalankan TryDesk.";
     note.prepend(lead);
     const foot = document.createElement("p"); foot.className = "m-foot"; foot.textContent = "Aplikasi HP ini hanya untuk mengontrol PC. Untuk dikontrol dari jauh, pasang TryDesk di PC Windows.";
     note.append(foot);   // inside the connect card, under the LAN link (the version is in Pengaturan → Tentang)
@@ -104,6 +107,11 @@
     tabBar.appendChild(b);
   }
   document.body.appendChild(tabBar);
+  // Devices as rows (direction A: picture, name, ID, when), unless the user already picked grid or list.
+  if (!store.get("recentView")) { store.set("recentView", "list"); try { recentView = "list"; applyRecentView(); } catch {} }
+  // Devices tab: the page gets its name as a big heading (direction A), above the Recent / Favorites tabs.
+  const devTitle = document.createElement("h2"); devTitle.className = "m-page-title"; devTitle.textContent = "Perangkat";
+  $(".hcard-sessions")?.prepend(devTitle);
   let homeTabM = store.get("m.tab") === "devices" ? "devices" : "connect";
   const settingsOpen = () => !$("#overlay-settings").classList.contains("hidden");
   // The "Connect by IP" help is a full page of its own: the bar sat on top of it (z-index 120 vs 50) and covered
@@ -118,6 +126,7 @@
   tabBar.addEventListener("click", (e) => {
     const b = e.target.closest(".m-tab"); if (!b) return;
     const key = b.dataset.tab;
+    const changed = key !== (settingsOpen() ? "settings" : homeTabM);
     if (key === "settings") { if (!settingsOpen()) toggleSettings(); }
     else {
       if (settingsOpen()) toggleSettings();
@@ -125,7 +134,32 @@
       homeTabM = key; store.set("m.tab", key);
     }
     paintTabs();
+    // The page arrives on one beat and its heading rises (Settings does this itself when it opens).
+    if (changed && key === "devices") arrive($(".hcard-sessions"), $(".m-page-title"));
+    else if (changed && key === "connect") arrive($(".hcard-remote"), $(".stage-title"));
   });
+
+  // Opening screen: three real steps, then away. Step 1 = this script ran (the app is loaded); step 2 = the server
+  // answered (an ID arrived); step 3 = ready. Offline: it still leaves after 3 s, saying so, because Connect by IP
+  // works without the server.
+  (() => {
+    const boot = $("#td-boot"); if (!boot) return;
+    const say = (id, en) => { const t = $("#td-boot-step"); if (t) t.textContent = lang === "en" ? en : id; };
+    const step = (n) => { boot.dataset.step = String(n); };
+    const leave = () => {
+      if (boot.classList.contains("leaving")) return;
+      boot.classList.add("leaving");
+      setTimeout(() => boot.classList.add("gone"), 260);
+      arrive(homeTabM === "devices" ? $(".hcard-sessions") : $(".hcard-remote"), homeTabM === "devices" ? $(".m-page-title") : $(".stage-title"));
+    };
+    step(1); say("Menyambung ke server", "Connecting to the server");
+    const t0 = Date.now();
+    const tick = setInterval(() => {
+      const online = typeof myId !== "undefined" && !!myId;
+      if (online) { clearInterval(tick); step(2); say("Siap", "Ready"); setTimeout(() => { step(3); setTimeout(leave, 260); }, 230); }
+      else if (Date.now() - t0 > 3000) { clearInterval(tick); say("Server belum terjangkau", "Server not reached yet"); setTimeout(leave, 600); }
+    }, 80);
+  })();
   new MutationObserver(paintTabs).observe($("#overlay-settings"), { attributes: true, attributeFilter: ["class"] });
   new MutationObserver(paintTabs).observe($("#screen-home"), { attributes: true, attributeFilter: ["class"] });
   if ($("#overlay-lan-help")) new MutationObserver(paintTabs).observe($("#overlay-lan-help"), { attributes: true, attributeFilter: ["class"] });
@@ -134,7 +168,7 @@
   const idField = $("#remote-id");
   // "decimal": digits plus a separator key, so an IP address ("192.168.1.20") can be typed too.
   if (idField) { idField.setAttribute("inputmode", "decimal"); idField.setAttribute("enterkeyhint", "go"); }
-  // Format the ID as it is typed ("123456789" → "123 456 789") — initiateConnection expects the spaced form.
+  // Format the ID as it is typed ("123456789" → "123 456 789"), initiateConnection expects the spaced form.
   // With a separator it is an IP address: keep it, turning the comma an Indonesian keypad shows into a dot.
   idField?.addEventListener("input", () => {
     if (/[.,:]/.test(idField.value)) { const ip = idField.value.replace(/,/g, ".").replace(/[^0-9.:]/g, "").slice(0, 21); if (ip !== idField.value) idField.value = ip; return; }
@@ -142,8 +176,41 @@
     const f = d.replace(/(\d{3})(?=\d)/g, "$1 ");
     if (f !== idField.value) idField.value = f;
   });
-  // Enter / the keyboard's "Go" key is handled by app.js itself — a second listener here started the same
+  // Enter / the keyboard's "Go" key is handled by app.js itself, a second listener here started the same
   // connection twice, which threw the user off the Connecting screen (and its password box).
+
+  // ── Number pad for the ID (design direction A + C) ──
+  // An ID is nine digits and an IP address adds dots, so a pad of 0-9, "." and delete covers every case. The system
+  // keyboard used to cover half the screen, including the Hubungkan button; with inputmode "none" it stays down
+  // for this field (paste and a hardware keyboard still work). Each key feeds the same input handler as typing.
+  if (idField) {
+    idField.setAttribute("inputmode", "none");
+    const pad = document.createElement("div");
+    pad.className = "m-keypad"; pad.setAttribute("role", "group"); pad.setAttribute("aria-label", "Papan angka");
+    const DEL = '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 5H9l-6 7 6 7h12z"/><path d="M12 9l6 6M18 9l-6 6"/></svg>';
+    for (const k of ["1", "2", "3", "4", "5", "6", "7", "8", "9", ".", "0", "del"]) {
+      const b = document.createElement("button");
+      b.type = "button"; b.className = "m-pad-key"; b.dataset.k = k;
+      if (k === "del") { b.innerHTML = DEL; b.setAttribute("aria-label", "Hapus angka (tahan untuk menghapus semua)"); }
+      else { b.textContent = k; if (k === ".") b.setAttribute("aria-label", "Titik (alamat IP)"); }
+      pad.appendChild(b);
+    }
+    idField.after(pad);
+    const setId = (v) => { idField.value = v; idField.dispatchEvent(new Event("input", { bubbles: true })); };
+    let holdTimer = null, held = false;
+    pad.addEventListener("pointerdown", (e) => {
+      const b = e.target.closest('.m-pad-key[data-k="del"]'); if (!b) return;
+      held = false; clearTimeout(holdTimer);
+      holdTimer = setTimeout(() => { held = true; setId(""); try { navigator.vibrate && navigator.vibrate(20); } catch {} }, 550);
+    });
+    for (const ev of ["pointerup", "pointercancel", "pointerleave"]) pad.addEventListener(ev, () => clearTimeout(holdTimer));
+    pad.addEventListener("click", (e) => {
+      const b = e.target.closest(".m-pad-key"); if (!b) return;
+      if (b.dataset.k === "del") { if (held) { held = false; return; } setId(idField.value.replace(/\s+$/, "").slice(0, -1)); }
+      else setId(idField.value + b.dataset.k);
+      try { navigator.vibrate && navigator.vibrate(8); } catch {}
+    });
+  }
 
   // ── Control Center on a phone: no file transfer / game mouse (the toolbar has its own) / clipboard polling ──
   // Screenshots and recordings stay when the native TdFile plugin is there to put them in the gallery.
@@ -167,7 +234,43 @@
   ccRender = () => {
     _ccRender();
     // drop "Layar penuh" (the app is already full-screen on a phone); keep "Putuskan koneksi"
-    $$("#control-center > .cc-leaf:not(.danger)").forEach((l) => l.remove());
+    $$("#control-center > .cc-fs-leaf").forEach((l) => l.remove());
+    if (ccSub) return;   // a category is open: only the list gets "Sambungkan PC lain"
+    // The phone's session sheet as drawn (Konsep Lengkap, "Menu sesi dengan angka"): the numbers, then Kualitas and
+    // Layar as segments and the two switches people reach for, one tap each. The other categories (Tampilan,
+    // Keamanan, Fitur lainnya) stay below as rows, so nothing the desktop list offers is lost.
+    const cc = $("#control-center"), sess = active;
+    cc.querySelectorAll('.cc-cat[data-cat="monitor"], .cc-cat[data-cat="quality"], .cc-cat[data-cat="sound"]').forEach((r) => r.remove());
+    const quick = document.createElement("div"); quick.className = "m-quick";
+    const seg = (title, opts) => {
+      const box = document.createElement("div"); box.className = "m-q-group";
+      const h = document.createElement("div"); h.className = "m-q-title"; h.textContent = title; box.appendChild(h);
+      const row = document.createElement("div"); row.className = "m-q-seg"; row.setAttribute("role", "group"); row.setAttribute("aria-label", title);
+      for (const o of opts) {
+        const b = document.createElement("button"); b.type = "button"; b.textContent = o.label;
+        b.classList.toggle("on", !!o.on); b.setAttribute("aria-pressed", String(!!o.on));
+        b.addEventListener("click", (e) => { e.stopPropagation(); o.run(); ccRender(); ccSyncStats(); });
+        row.appendChild(b);
+      }
+      box.appendChild(row); return box;
+    };
+    const sw = (label, on, run, disabled) => {
+      const b = document.createElement("button"); b.type = "button"; b.className = "ccp-switch"; b.setAttribute("role", "switch");
+      b.setAttribute("aria-checked", String(!!on)); b.disabled = !!disabled;
+      b.innerHTML = `<span></span><i class="ccp-tog${on ? " on" : ""}"></i>`; b.firstChild.textContent = label;
+      if (!disabled) b.addEventListener("click", (e) => { e.stopPropagation(); run(); ccRender(); ccSyncStats(); });
+      return b;
+    };
+    const pm = ccPresetMatch();
+    quick.appendChild(seg("Kualitas", [["hemat", "Hemat"], ["seimbang", "Seimbang"], ["gaming", "Gaming"], ["maksimal", "Maks"]]
+      .map(([k, label]) => ({ label, on: pm === k, run: () => setQuality(PRESETS[k]) }))));
+    if (sess && sess.monitors.length > 1) {
+      quick.appendChild(seg("Layar", sess.monitors.slice(0, 3).map((m) => ({ label: `Monitor ${m.index + 1}`, on: m.index === sess.currentMonitor,
+        run: () => { const it = ccItems("monitor").find((x) => x.label.startsWith(`Monitor ${m.index + 1}`)); it?.run?.(); } }))));
+    }
+    quick.appendChild(sw("Gelapkan layar PC", !!sess && sess.blackScreenActive, toggleBlackScreen));
+    quick.appendChild(sw("Suara dari PC", !!sess && sess.audioOn, toggleAudio, !sess || !sess.audioAvailable));
+    cc.querySelector(".cc-stats")?.after(quick);
     // The desktop's "＋" tab: a second PC while this one keeps running. The "Kembali ke sesi" button on Home (and
     // a running PC's tile) lead back.
     const add = document.createElement("button"); add.className = "cc-leaf";
@@ -266,7 +369,7 @@
   }
   function setMode(m) {
     mode = m; store.set("m.touchMode", m); renderModeBtn(); drawCursor();
-    showToast(m === "touchpad" ? "Touchpad — geser untuk menggerakkan kursor, ketuk untuk klik" : "Sentuh langsung — ketuk tepat di tempat yang mau diklik");
+    showToast(m === "touchpad" ? "Touchpad, geser untuk menggerakkan kursor, ketuk untuk klik" : "Sentuh langsung, ketuk tepat di tempat yang mau diklik");
   }
 
   let moveTimer = null, pendingMove = null, lastMoveAt = 0;
@@ -384,7 +487,7 @@
   //   • one-finger drag = relative mouse motion (looks around), tap = left click where the game's crosshair is,
   //     press and hold = hold the left button (mine / attack) while still looking around;
   //   • two-finger tap = right click, two-finger drag = scroll wheel (hotbar in many games);
-  //   • L / R buttons on the screen can be held for long presses (place, aim) — and give a right click to a single
+  //   • L / R buttons on the screen can be held for long presses (place, aim), and give a right click to a single
   //     pointer, e.g. a mouse in an emulator;
   //   • a real mouse (Bluetooth, or a PC emulator) sends its movement relatively too, with its own buttons.
   // The host already takes this ("mousemove-rel", the desktop's game mode). Off again when the session ends.
@@ -539,17 +642,21 @@
   // ── Floating toolbar ──
   const bar = document.createElement("div");
   bar.id = "m-toolbar";
-  const tb = (id, title, icon) => `<button class="m-tb" id="${id}" title="${title}" aria-label="${title}">${svg(icon)}</button>`;
+  // Design direction C: a dock with the latency and PC name, six labelled actions, and Putuskan as its red end
+  // (one row in landscape; in portrait it stacks: name row, actions, Putuskan across the width).
+  const tb = (id, title, icon, label) => `<button class="m-tb" id="${id}" title="${title}" aria-label="${title}">${svg(icon)}${label ? `<span class="m-tb-l">${label}</span>` : ""}</button>`;
   bar.innerHTML =
-    tb("m-btn-kbd", "Keyboard", `<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>`) +
-    tb("m-btn-keys", "Tombol khusus", `<path d="M4 7V5h16v2M9 19h6M12 5v14"/>`) +
-    tb("m-btn-mode", "Mode sentuh", "") +
-    tb("m-btn-game", "Mode game", `<rect x="2" y="7" width="20" height="11" rx="4"/><path d="M7 11v3M5.5 12.5h3"/><circle cx="15.5" cy="11.5" r=".9"/><circle cx="18" cy="14" r=".9"/>`) +
-    tb("m-btn-rotate", "Putar layar", `<rect x="3" y="7" width="18" height="11" rx="2"/><path d="M8 3.5a9 9 0 0 1 9 1.5"/><polyline points="17 2 17 5 14 5"/>`) +
-    tb("m-btn-menu", "Menu", `<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>`) +
-    `<span class="m-lat" id="m-lat">- ms</span>` +
-    tb("m-btn-close", "Putuskan", `<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>`) +
-    tb("m-btn-hide", "Sembunyikan toolbar", `<polyline points="6 9 12 15 18 9"/>`);
+    `<div class="m-dock-head"><span class="m-lat" id="m-lat">- ms</span><span class="m-peer" id="m-peer"></span>` +
+    tb("m-btn-hide", "Sembunyikan toolbar", `<polyline points="6 9 12 15 18 9"/>`) + `</div>` +
+    `<div class="m-dock-row">` +
+    tb("m-btn-kbd", "Keyboard", `<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>`, "Keyboard") +
+    tb("m-btn-keys", "Tombol khusus", `<path d="M4 7V5h16v2M9 19h6M12 5v14"/>`, "Tombol") +
+    tb("m-btn-mode", "Mode sentuh", "", "Sentuh") +
+    tb("m-btn-game", "Mode game", `<rect x="2" y="7" width="20" height="11" rx="4"/><path d="M7 11v3M5.5 12.5h3"/><circle cx="15.5" cy="11.5" r=".9"/><circle cx="18" cy="14" r=".9"/>`, "Game") +
+    tb("m-btn-rotate", "Putar layar", `<rect x="3" y="7" width="18" height="11" rx="2"/><path d="M8 3.5a9 9 0 0 1 9 1.5"/><polyline points="17 2 17 5 14 5"/>`, "Putar") +
+    tb("m-btn-menu", "Menu", `<line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/>`, "Menu") +
+    `</div>` +
+    tb("m-btn-close", "Putuskan", `<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>`, "Putuskan");
   const peek = document.createElement("button");
   peek.id = "m-peek"; peek.className = "hidden"; peek.title = "Tampilkan toolbar"; peek.setAttribute("aria-label", "Tampilkan toolbar");
   peek.innerHTML = svg(`<polyline points="18 15 12 9 6 15"/>`);
@@ -563,7 +670,7 @@
     touchpad: `<rect x="4" y="3" width="16" height="18" rx="3"/><line x1="4" y1="15" x2="20" y2="15"/><line x1="12" y1="15" x2="12" y2="21"/>`,
     direct: `<path d="M9 11V5a2 2 0 014 0v6"/><path d="M13 9.5a2 2 0 014 0V12"/><path d="M17 11a2 2 0 014 0v3a7 7 0 01-7 7h-1a7 7 0 01-6-3.4L4.3 13a2 2 0 013.4-2L9 13"/>`,
   };
-  function renderModeBtn() { const b = $("#m-btn-mode"); b.innerHTML = svg(MODE_ICON[mode]); b.classList.toggle("on", mode === "direct"); }
+  function renderModeBtn() { const b = $("#m-btn-mode"); b.querySelector("svg")?.remove(); b.insertAdjacentHTML("afterbegin", svg(MODE_ICON[mode])); b.classList.toggle("on", mode === "direct"); }
   function renderKbdBtn() { $("#m-btn-kbd").classList.toggle("on", document.activeElement === kbd); }
   renderModeBtn();
   $("#m-btn-kbd").addEventListener("click", toggleKeyboard);
@@ -591,7 +698,8 @@
 
   // Latency badge mirrors the desktop session bar (pollStats writes #rt-latency-badge).
   const lat = $("#rt-latency-badge");
-  if (lat) new MutationObserver(() => { const m = $("#m-lat"); m.textContent = lat.textContent; m.className = "m-lat " + [...lat.classList].filter((c) => c.startsWith("lat-")).join(" "); })
+  // The badge holds only <b>number</b> <small>ms</small> written by setLatBadge in app.js, so its markup is copied.
+  if (lat) new MutationObserver(() => { const p = $("#m-peer"); if (p) p.textContent = active ? (active.label || "") : ""; const m = $("#m-lat"); m.innerHTML = lat.innerHTML; m.className = "m-lat " + [...lat.classList].filter((c) => c.startsWith("lat-")).join(" "); })
     .observe(lat, { childList: true, characterData: true, subtree: true, attributes: true, attributeFilter: ["class"] });
 
   // ── Session lifecycle: wake lock, first-time hints, reset per session ──
@@ -647,7 +755,7 @@
     if (probe || !ws || ws.readyState !== WebSocket.OPEN || Date.now() - lastHeard < FRESH_MS) return;
     const timer = setTimeout(() => {
       probe = null;
-      logInfoSafe("server socket silent — reconnecting");
+      logInfoSafe("server socket silent, reconnecting");
       if (resend) resendAfterRegister = true;
       connectSignaling();
     }, PROBE_MS);

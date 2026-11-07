@@ -29,7 +29,7 @@ function servicePasswordHash() {
   try { const j = JSON.parse(fs.readFileSync(path.join(_serviceDir, "service-host", "service.json"), "utf8")); return /^[0-9a-f]{32}:[0-9a-f]{64}$/.test(j.passwordHash || "") ? j.passwordHash : ""; } catch { return ""; }
 }
 // One-time: correct the on-disk case of an older lowercase "trydesk" user-data folder. Windows is
-// case-insensitive so all stored data (ID, settings, localStorage) is preserved — this only fixes how the
+// case-insensitive so all stored data (ID, settings, localStorage) is preserved, this only fixes how the
 // folder name is displayed. Done before anything opens a file inside it. A two-step rename forces the
 // case change (a direct trydesk→TryDesk rename can be treated as the same path on Windows).
 try {
@@ -45,13 +45,13 @@ try {
 // GPU fallback: some client PCs (old/VM/RDP GPUs, outdated drivers) fault in the GPU process and show
 // a blank window or none at all. Disable hardware acceleration when asked (--no-gpu / TRYDESK_NO_GPU)
 // OR when a previous run hit a GPU crash and left the flag below (written automatically, see the
-// child-process-gone handler) — so the app self-heals on the next launch without the user doing anything.
+// child-process-gone handler), so the app self-heals on the next launch without the user doing anything.
 let _noGpuFlag = null;
 try { _noGpuFlag = path.join(app.getPath("userData"), "disable-gpu.flag"); } catch {}
 const _flagExists = () => { try { return !!_noGpuFlag && fs.existsSync(_noGpuFlag); } catch { return false; } };
 // Hyper-V guests (Windows Sandbox, Hyper-V VMs) can expose the host's GPU through GPU-PV. There, GPU-accelerated
 // screen capture (DXGI / WGC frames shared with Chromium's GPU process) terminates the WHOLE VM the moment a
-// session starts (Sandbox: "virtual machine exited unexpectedly 0x80370106") — measured; GDI and software
+// session starts (Sandbox: "virtual machine exited unexpectedly 0x80370106"), measured; GDI and software
 // rendering are fine. Such guests run in software mode. --force-gpu overrides.
 function _hyperVGuest() {
   if (process.platform !== "win32") return null;
@@ -73,7 +73,7 @@ if (_forceNoGpu) { try { app.disableHardwareAcceleration(); } catch {} }
 
 // Screen-capture coverage: on some PCs the default DXGI capturer can't see a monitor (HDR on, or the monitor
 // hangs off a different GPU), so getSources lists fewer screens than Windows has and that monitor can't be
-// streamed — picking it shows another screen. Windows Graphics Capture (WGC) sees every monitor. It is
+// streamed, picking it shows another screen. Windows Graphics Capture (WGC) sees every monitor. It is
 // switched on only where that gap was detected (flag written by the startup check / get-monitors), so every
 // other PC keeps the default capturer. --wgc forces it for testing.
 let _wgcFlag = null;
@@ -81,7 +81,7 @@ try { _wgcFlag = path.join(app.getPath("userData"), "wgc-capture.flag"); } catch
 // Inside a Remote Desktop (RDP) session WGC sent only black frames (rented RDP PC, 2026-11-02: black with the
 // window full-screen or not), while DXGI capture of the same session showed the desktop. There WGC is switched
 // off so Chromium uses DXGI / GDI; in Windows Sandbox (also a remote session) that kept the picture (measured).
-// Asked from Windows itself (SM_REMOTESESSION): SESSIONNAME alone missed it in a copy run as administrator — that
+// Asked from Windows itself (SM_REMOTESESSION): SESSIONNAME alone missed it in a copy run as administrator, that
 // environment has no SESSIONNAME, so WGC stayed on and every capture failed ("Could not start video source", the
 // viewer could not connect; rented PC, 2026-11-02).
 const _rdpSession = process.platform === "win32" && (() => {
@@ -98,7 +98,7 @@ let _uiLang = null;
 function uiLang() { if (_uiLang) return _uiLang; try { return /^id\b/i.test(app.getLocale()) ? "id" : "en"; } catch { return "id"; } }
 const L = (id, en) => (uiLang() === "en" ? en : id);
 
-// Make any startup failure VISIBLE (and logged) instead of a silent no-window exit — so a client PC
+// Make any startup failure VISIBLE (and logged) instead of a silent no-window exit, so a client PC
 // that "shows nothing" gives a real error + a log we can read, rather than just vanishing.
 let _logFile;
 try { _logFile = path.join(app.getPath("userData"), "trydesk-crash.log"); } catch { _logFile = path.join(os.tmpdir(), "trydesk-crash.log"); }
@@ -129,13 +129,13 @@ function logCrash(tag, err) {
 function logInfo(msg) { appendLog(`[${new Date().toISOString()}] boot: ${msg}\n`); }
 // Build stamp (packaged app.asar mtime) so a log shows WHICH build a client PC is really running.
 const _buildStamp = (() => { try { return require("original-fs").statSync(path.join(process.resourcesPath, "app.asar")).mtime.toISOString(); } catch { return "dev"; } })();
-logInfo(`module loaded — electron ${process.versions.electron}, ${process.platform} ${process.arch}, build ${_buildStamp}, no-gpu=${_forceNoGpu}${_vmGuest ? ` (vm: ${_vmGuest})` : ""}, wgc=${_wgcOn}${_rdpSession ? " (rdp session: wgc off)" : ""}`);
+logInfo(`module loaded, electron ${process.versions.electron}, ${process.platform} ${process.arch}, build ${_buildStamp}, no-gpu=${_forceNoGpu}${_vmGuest ? ` (vm: ${_vmGuest})` : ""}, wgc=${_wgcOn}${_rdpSession ? " (rdp session: wgc off)" : ""}`);
 let _windowReady = false;   // true once the renderer has loaded
-// A crash BEFORE the window loads is startup-fatal: show it, then EXIT — so a half-dead process
+// A crash BEFORE the window loads is startup-fatal: show it, then EXIT, so a half-dead process
 // doesn't linger holding the single-instance lock (which would make the next open "do nothing").
 process.on("uncaughtException", (e) => { logCrash("uncaughtException", e); if (!_windowReady) { try { app.exit(1); } catch {} } });
 // A rejected promise is NON-fatal (unlike uncaughtException): log it for diagnosis but DON'T pop a scary
-// modal — e.g. discord-rpc rejects when Discord isn't running, which must never block the app from launching.
+// modal, e.g. discord-rpc rejects when Discord isn't running, which must never block the app from launching.
 process.on("unhandledRejection", (e) => { appendLog(`[${new Date().toISOString()}] unhandledRejection (non-fatal): ${(e && e.stack) || e}\n`); });
 
 // The real exe to relaunch: the portable build runs from a temp-extracted copy that its wrapper may delete once
@@ -144,7 +144,7 @@ const _selfExe = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
 const relaunchSelf = () => app.relaunch(process.env.PORTABLE_EXECUTABLE_FILE ? { execPath: _selfExe, args: process.argv.slice(1) } : undefined);
 
 // Relaunched elevated ("Run as administrator"): wait for the old instance to exit before taking the single-
-// instance lock, or the new one would find it still held and quit — leaving nothing running.
+// instance lock, or the new one would find it still held and quit, leaving nothing running.
 const _waitPid = Number((process.argv.find((a) => a.startsWith("--wait-for-pid=")) || "").split("=")[1]) || 0;
 if (_waitPid) {
   const until = Date.now() + 8000, nap = new Int32Array(new SharedArrayBuffer(4));
@@ -166,7 +166,7 @@ else app.on("second-instance", (_e, argv) => {
 });
 
 // Taskbar identity. Packaged builds use "TryDesk" (notifications show that name). A dev run (plain electron.exe)
-// gets its own ID — sharing one made Windows show the Electron icon for the real app on a developer's PC.
+// gets its own ID, sharing one made Windows show the Electron icon for the real app on a developer's PC.
 const AUMID = app.isPackaged ? "TryDesk" : "TryDesk.Dev";
 // Windows takes the taskbar and notification icon for an AUMID from the Start Menu shortcut that carries it. A
 // "TryDesk.lnk" can end up pointing at an exe that is gone: the portable build's temp copy (a fresh %TEMP% folder
@@ -211,7 +211,7 @@ function trayImage() {
 function refreshTray() {
   if (!tray) return;
   const idLine = _trayId ? `ID ${_trayId}` : L("Belum terhubung ke server", "Not connected to the server");
-  tray.setToolTip(`TryDesk — ${_trayHosting ? L("PC ini sedang dikontrol", "This PC is being controlled") : idLine}`);
+  tray.setToolTip(`TryDesk, ${_trayHosting ? L("PC ini sedang dikontrol", "This PC is being controlled") : idLine}`);
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: `TryDesk · ${idLine}`, enabled: false },
     { type: "separator" },
@@ -317,15 +317,15 @@ function refreshKeyHook() {
     inputSim.startKeyHook((vk, down) => {
       if (!(_kbWantCapture && _kbFocused)) return false;   // not focused → pass through to the local OS
       if (down) _downVks.add(vk); else _downVks.delete(vk);
-      // ESCAPE HATCH 1 — Ctrl+Alt+Shift+Esc releases control (mouse + keyboard) so the user can ALWAYS get
+      // ESCAPE HATCH 1, Ctrl+Alt+Shift+Esc releases control (mouse + keyboard) so the user can ALWAYS get
       // back to their own PC, even mid-game. It REQUIRES Esc on purpose: a bare Ctrl+Alt+Shift used to fire
-      // this, which clashed with the many app/game shortcuts that hold Ctrl+Alt+Shift — now those pass
+      // this, which clashed with the many app/game shortcuts that hold Ctrl+Alt+Shift, now those pass
       // through to the remote, and only the full +Esc combo escapes.
       if (vk === 0x1B && down && _anyDown(_CTRL_VKS) && _anyDown(_ALT_VKS) && _anyDown(_SHIFT_VKS)) {
         releaseControlNow();
         return false;
       }
-      // ESCAPE HATCH 2 — Pause/Break, the dedicated "give me my PC back" key (never forwarded/swallowed).
+      // ESCAPE HATCH 2, Pause/Break, the dedicated "give me my PC back" key (never forwarded/swallowed).
       if (vk === 0x13) { if (down) releaseControlNow(); return false; }
       try { mainWindow && mainWindow.webContents.send("captured-key", { vk, down }); } catch {}
       return true;                                         // swallow locally → key only reaches the remote
@@ -340,7 +340,7 @@ function refreshKeyHook() {
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 960,
-    height: 680,
+    height: 600,
     minWidth: 700,
     minHeight: 500,
     frame: false,
@@ -366,7 +366,7 @@ function createWindow() {
     const k = String(input.key || "").toLowerCase();
     if (k === "f12" || (input.control && input.shift && (k === "i" || k === "j" || k === "c")) || (input.control && k === "r") || k === "f5") ev.preventDefault();
   });
-  // The taskbar button takes its icon and "pin" target from these window properties — the TryDesk exe itself
+  // The taskbar button takes its icon and "pin" target from these window properties, the TryDesk exe itself
   // (for the portable build: the portable file, not its temp-extracted copy).
   try {
     mainWindow.setAppDetails({ appId: AUMID, appIconPath: _selfExe, appIconIndex: 0, relaunchCommand: `"${_selfExe}"`, relaunchDisplayName: "TryDesk" });
@@ -378,7 +378,7 @@ function createWindow() {
     if (_startInTray && tray) return;                     // Windows login start: stay in the tray
     try { mainWindow.show(); mainWindow.focus(); } catch {}
   });
-  // Alt+F4 / the taskbar's "Close window": same as the X button — hide to the tray, unless really quitting.
+  // Alt+F4 / the taskbar's "Close window": same as the X button, hide to the tray, unless really quitting.
   mainWindow.on("close", (e) => {
     // The service's host only shows its window for a request or a running session: closing it just hides it.
     if (_serviceHost && !_quitting) { e.preventDefault(); mainWindow.hide(); return; }
@@ -410,7 +410,7 @@ function createWindow() {
   // Lock navigation down: the app is a single local page. Block opening child windows and block
   // any attempt to navigate the window away from the bundled file (defense if the renderer is abused).
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  // Only the app's own page may load. "Any file://" let a file dropped on the window replace the app — every
+  // Only the app's own page may load. "Any file://" let a file dropped on the window replace the app, every
   // session died and the native keyboard/mouse hooks stayed engaged with no page left to release them.
   const appPage = require("url").pathToFileURL(path.join(__dirname, "renderer", "index.html")).href.toLowerCase();
   const blockNav = (e, url) => { if (String(url).split(/[?#]/)[0].toLowerCase() !== appPage) e.preventDefault(); };
@@ -426,7 +426,7 @@ async function captureCoverageGap() {
 }
 
 app.whenReady().then(async () => {
-  if (!_gotLock) { logInfo("second instance — quitting"); return; }   // a primary instance already owns the window
+  if (!_gotLock) { logInfo("second instance, quitting"); return; }   // a primary instance already owns the window
   logInfo("app ready" + (inputReady && inputSim.isElevated() ? " (administrator)" : ""));
   // Relaunch ONCE into WGC before any window exists when a monitor is invisible to the default capturer,
   // so the very first session can already stream it. Bounded wait: never delays startup by more than 2s.
@@ -435,7 +435,7 @@ app.whenReady().then(async () => {
       const r = await Promise.race([captureCoverageGap(), new Promise((res) => setTimeout(() => res(null), 2000))]);
       if (r && r.gap) {
         fs.writeFileSync(_wgcFlag, "1");
-        logInfo(`capture gap: ${screen.getAllDisplays().length} displays but ${r.sources} capture sources — relaunching with WGC`);
+        logInfo(`capture gap: ${screen.getAllDisplays().length} displays but ${r.sources} capture sources, relaunching with WGC`);
         relaunchSelf(); app.exit(0); return;
       }
     } catch (e) { logInfo("capture coverage check failed: " + e.message); }
@@ -450,8 +450,8 @@ app.whenReady().then(async () => {
   // file:// page, so none is set here).
   try {
     const { session } = require("electron");
-    // Grant the permissions the app actually uses — crucially pointerLock/keyboardLock so game mode
-    // can capture the mouse — and deny everything else. Without this, Electron can refuse pointer lock
+    // Grant the permissions the app actually uses, crucially pointerLock/keyboardLock so game mode
+    // can capture the mouse, and deny everything else. Without this, Electron can refuse pointer lock
     // and the remote mouse won't move inside captured games. (media/display-capture keep screen share working.)
     const ALLOW = new Set(["pointerLock", "keyboardLock", "fullscreen", "media", "mediaKeySystem", "display-capture", "clipboard-read", "clipboard-sanitized-write"]);
     session.defaultSession.setPermissionRequestHandler((_wc, p, cb) => cb(ALLOW.has(p)));
@@ -462,7 +462,7 @@ app.whenReady().then(async () => {
     if (session.defaultSession.setDisplayMediaRequestHandler) {
       session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
         desktopCapturer.getSources({ types: ["screen"] }).then((sources) => {
-          // Never silently substitute the first screen for a REQUESTED one — that streamed the wrong monitor
+          // Never silently substitute the first screen for a REQUESTED one, that streamed the wrong monitor
           // ("stuck on the previous monitor"). set-dm-source already verified the id; a miss here means the
           // screen vanished in between → deny, and the renderer falls back to the legacy path.
           const src = sources.find((s) => s.id === _dmSourceId) || (_dmSourceId ? null : sources[0]);
@@ -493,7 +493,7 @@ app.whenReady().then(async () => {
     if (d && d.type === "GPU" && !_forceNoGpu && !_gpuRelaunched && _noGpuFlag) {
       // Auto-recover from a GPU-process crash silently (no scary error dialog): relaunch once without
       // hardware acceleration so the session keeps working.
-      logInfo("child-process-gone: " + info + " — auto-recovering (software render)");
+      logInfo("child-process-gone: " + info + ", auto-recovering (software render)");
       _gpuRelaunched = true;
       try { fs.writeFileSync(_noGpuFlag, "1"); } catch {}
       try { relaunchSelf(); app.exit(0); } catch {}
@@ -505,16 +505,16 @@ app.whenReady().then(async () => {
   // the NEXT launch retries hardware acceleration (encode load is now much lower: maintain-resolution +
   // a preset-driven fps cap), instead of staying stuck in slow software mode forever.
   if (_flagExists() && !process.argv.includes("--no-gpu") && !process.env.TRYDESK_NO_GPU) {
-    setTimeout(() => { if (_windowReady) { try { fs.unlinkSync(_noGpuFlag); logInfo("cleared disable-gpu.flag — next launch retries GPU"); } catch {} } }, 25000);
+    setTimeout(() => { if (_windowReady) { try { fs.unlinkSync(_noGpuFlag); logInfo("cleared disable-gpu.flag, next launch retries GPU"); } catch {} } }, 25000);
   }
   // Watch whether a game/app has captured (hidden) the OS cursor; tell the renderer on change so the
   // viewer can auto-switch to relative mouse (no manual "game mode" toggle). Cheap 250ms poll.
   // Hysteresis: games (esp. with our mouse injection fighting them) make the OS cursor flicker
   // hidden/shown every few hundred ms. Report "hidden" instantly, but only report "shown" after the
-  // cursor has stayed visible continuously for 1.5s — so game mode STAYS engaged through the blips
+  // cursor has stayed visible continuously for 1.5s, so game mode STAYS engaged through the blips
   // instead of spamming on/off (which made the captured mouse unusable).
   let _shownSince = 0;
-  // Only matters while someone controls this PC — no 4×/s cursor polling (or log lines) when idle or viewing.
+  // Only matters while someone controls this PC, no 4×/s cursor polling (or log lines) when idle or viewing.
   let _hosting = false;
   ipcMain.on("hosting-state", (_e, on) => {
     _hosting = !!on; _trayHosting = _hosting; refreshTray();
@@ -542,7 +542,7 @@ app.whenReady().then(async () => {
     else { if (!_shownSince) _shownSince = now; hidden = (now - _shownSince) < 1500; }
     if (hidden !== _hostCursorHidden) { _hostCursorHidden = hidden; try { mainWindow.webContents.send("host-cursor-hidden", hidden); } catch {} }
   }, 250);
-  // When a viewer's control channel opens, the host re-emits the CURRENT cursor state — so a game that was
+  // When a viewer's control channel opens, the host re-emits the CURRENT cursor state, so a game that was
   // ALREADY running at connect time (no state change to trigger on) still auto-enables the viewer's game mouse.
   ipcMain.on("request-cursor-state", () => { try { mainWindow.webContents.send("host-cursor-hidden", _hostCursorHidden); } catch {} });
   // Let the renderer append to the same log, so the whole game-mode chain is traceable in one file.
@@ -582,7 +582,7 @@ app.whenReady().then(async () => {
   let displayChangeTimer = null, displayForce = false;
   const sendDisplayChanged = (force) => {
     displayForce = displayForce || force;
-    // Coalesce bursts (games/sandboxes fire these rapidly) — the renderer also no-ops when the captured
+    // Coalesce bursts (games/sandboxes fire these rapidly), the renderer also no-ops when the captured
     // size is unchanged, so this only ever reaches a real resolution change (or a display that was replaced).
     clearTimeout(displayChangeTimer);
     displayChangeTimer = setTimeout(() => { const f = displayForce; displayForce = false; try { mainWindow && mainWindow.webContents.send("display-changed", f); } catch {} }, 600);
@@ -603,14 +603,14 @@ app.whenReady().then(async () => {
     if (ids !== displayIds) { displayIds = ids; logInfo("displays replaced: " + ids); sendDisplayChanged(true); }
   }, 3000);
   // Persistent panic key: release any host black-screen/input-lock if a session leaves them stuck.
-  // (BlockInput swallows physical keys, so while input is locked only Ctrl+Alt+Del breaks it — Windows' rule.)
+  // (BlockInput swallows physical keys, so while input is locked only Ctrl+Alt+Del breaks it, Windows' rule.)
   // Tell the renderer so the host UI and the viewer's toggles show the truth afterwards.
   // A hotkey belongs to whichever process registers it first. With the Windows service, the service's host and the
   // user's own app both run on this desktop; only the service's host darkens the screen then, so the app yields
   // the key (panic-key-yield) and the service keeps retrying until it holds it.
   ensurePanicKey();
   if (_serviceHost) setInterval(ensurePanicKey, 5000);
-  // Discord Rich Presence — "Using TryDesk" on the user's profile (best-effort, silent if unavailable).
+  // Discord Rich Presence, "Using TryDesk" on the user's profile (best-effort, silent if unavailable).
   if (!_serviceHost) { try { discordRPC.init(logInfo); } catch (e) { logInfo("discord RPC init skipped: " + e.message); } }
   // The renderer reports session state ("idle" | "hosting" | "viewing") so the presence reflects what's happening.
   ipcMain.on("discord-activity", (_e, state) => { try { discordRPC.setActivity(String(state || "idle")); } catch {} });
@@ -636,7 +636,7 @@ ipcMain.handle("get-config", () => ({ ...config, appVersion: app.getVersion(), p
 
 // Update check: https://trydesk.ai.id/update/version.json says the newest version and the oldest one still considered
 // safe ({ latest, minimum, url, notes: { id, en } }). Fetched here (not in the page) so the page's CSP stays as tight
-// as it is. Only well-formed fields go back; anything else — offline, a bad answer — is null and blocks nothing.
+// as it is. Only well-formed fields go back; anything else,offline, a bad answer,is null and blocks nothing.
 // TRYDESK_UPDATE_URL lets a local test point the check at http://127.0.0.1 (nothing else is accepted).
 const UPDATE_URL = /^http:\/\/(127\.0\.0\.1|localhost):\d+\/[\w./-]*$/.test(process.env.TRYDESK_UPDATE_URL || "") ? process.env.TRYDESK_UPDATE_URL : "https://trydesk.ai.id/update/version.json";
 ipcMain.handle("check-update", async () => {
@@ -684,7 +684,7 @@ const LAN_MAX_LINE = 64 * 1024, LAN_MAX_IN = 6, LAN_MAX_PER_IP = 2, LAN_MAX_MSG_
 let lanServer = null, lanSeq = 0;
 const lanConns = new Map();   // "lan-in:<ip>#n" (someone asking this PC) / "lan:<address>" (this PC asking) -> socket
 const lanIp = (a) => String(a || "").replace(/^::ffff:/i, "");
-// 10/8, 172.16/12, 192.168/16, loopback, link-local, 100.64/10 (CGNAT — Tailscale/ZeroTier style VPNs), IPv6 ULA/link-local.
+// 10/8, 172.16/12, 192.168/16, loopback, link-local, 100.64/10 (CGNAT, Tailscale/ZeroTier style VPNs), IPv6 ULA/link-local.
 const CGNAT_RE = /^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./;
 // 100.64/10 counts as "local" only when this PC itself has such an address (a Tailscale/ZeroTier style VPN). On a
 // mobile/ISP connection that range is the carrier's shared network, where other subscribers are not neighbours.
@@ -954,8 +954,70 @@ ipcMain.handle("set-hw-accel", (_e, on) => {
 });
 ipcMain.handle("get-hw-accel", () => !_userNoGpu);
 // External links only to TryDesk's own sites; everything else in the window stays blocked.
+//
+// Linux AppImage (owner's report 7 Nov, XFCE: "Failed to execute default Web Browser. Input/output error." on the
+// update notice's Download): the AppImage launcher (electron-builder's AppRun) prepends TryDesk's own folders to
+// LD_LIBRARY_PATH, XDG_DATA_DIRS, PATH and GSETTINGS_SCHEMA_DIR. shell.openExternal hands the link to xdg-open, the
+// browser inherits those variables, loads TryDesk's bundled old libraries / missing schemas and fails to start. So on
+// Linux the browser is started by us with the AppImage additions removed, trying the common openers in turn; if none
+// starts, the user gets the address with a Copy button instead of a dead button. Windows and macOS keep openExternal.
+function linuxCleanEnv() {
+  const env = { ...process.env };
+  const appdir = env.APPDIR;
+  if (appdir) {
+    const strip = (v) => String(v || "").split(":").filter((p) => p && !p.startsWith(appdir)).join(":");
+    for (const k of ["LD_LIBRARY_PATH", "LD_PRELOAD", "XDG_DATA_DIRS", "PATH", "GSETTINGS_SCHEMA_DIR", "GIO_MODULE_DIR", "GDK_PIXBUF_MODULE_FILE", "GTK_PATH", "QT_PLUGIN_PATH", "PYTHONPATH"]) {
+      if (!(k in env)) continue;
+      const v = strip(env[k]);
+      if (v) env[k] = v; else delete env[k];
+    }
+    for (const k of ["APPDIR", "APPIMAGE", "ARGV0", "OWD"]) delete env[k];
+  }
+  if (!env.PATH) env.PATH = "/usr/local/bin:/usr/bin:/bin";
+  return env;
+}
+// Starts one opener. Resolves true when it exits with 0, or is still running after 4 s (a browser started directly
+// stays open); false when it is missing or exits with an error.
+function linuxTry(cmd, args, env) {
+  return new Promise((resolve) => {
+    let done = false;
+    const end = (ok) => { if (!done) { done = true; resolve(ok); } };
+    let p;
+    try { p = require("child_process").spawn(cmd, args, { env, detached: true, stdio: "ignore" }); } catch { return end(false); }
+    p.on("error", () => end(false));
+    p.on("exit", (code) => end(code === 0));
+    setTimeout(() => { try { p.unref(); } catch {} end(true); }, 4000);
+  });
+}
+async function linuxOpenUrl(url) {
+  const env = linuxCleanEnv();
+  const tries = [["xdg-open", [url]], ["gio", ["open", url]], ["sensible-browser", [url]], ["x-www-browser", [url]],
+    ["firefox", [url]], ["chromium", [url]], ["chromium-browser", [url]], ["google-chrome", [url]], ["brave-browser", [url]]];
+  for (const [cmd, args] of tries) if (await linuxTry(cmd, args, env)) return true;
+  return false;
+}
+async function openLink(url) {
+  let ok;
+  if (process.platform === "linux") ok = await linuxOpenUrl(url);
+  else ok = await shell.openExternal(url).then(() => true, () => false);
+  if (ok) return true;
+  try {
+    const r = await dialog.showMessageBox(mainWindow, {
+      type: "info", noLink: true, defaultId: 0, cancelId: 1,
+      buttons: [L("Salin tautan", "Copy link"), L("Tutup", "Close")],
+      title: "TryDesk",
+      message: L("Browser tidak bisa dibuka dari TryDesk.", "TryDesk couldn't open your browser."),
+      detail: L("Buka alamat ini di browser Anda:\n", "Open this address in your browser:\n") + url,
+    });
+    if (r.response === 0) clipboard.writeText(url);
+  } catch {}
+  return false;
+}
 ipcMain.on("open-external", (_e, href) => {
-  try { const u = new URL(String(href)); if (u.protocol === "https:" && /^(trydesk\.ai\.id|www\.trydesk\.ai\.id|github\.com)$/.test(u.hostname)) shell.openExternal(u.href); } catch {}
+  try {
+    const u = new URL(String(href));
+    if (u.protocol === "https:" && /^(trydesk\.ai\.id|www\.trydesk\.ai\.id|github\.com)$/.test(u.hostname)) openLink(u.href);
+  } catch {}
 });
 ipcMain.on("set-discord-enabled", (_e, on) => { try { discordRPC.setEnabled(!!on); } catch {} });
 // Native confirm for destructive actions (e.g. Regenerate ID). Returns true only if the user picks OK.
@@ -978,7 +1040,7 @@ ipcMain.handle("confirm-dialog", async (_e, opts) => {
 
 let _lastMonitorMap = "";
 ipcMain.handle("get-monitors", async () => {
-  // Enumerate by OS DISPLAY — screen.getAllDisplays() is the authoritative monitor count/geometry,
+  // Enumerate by OS DISPLAY, screen.getAllDisplays() is the authoritative monitor count/geometry,
   // so every physical monitor is always listed even when desktopCapturer.getSources() under-reports
   // (some Windows GPU/driver setups return fewer "screen" sources than there are displays).
   // Each display gets its own capture id: the exact source matched by display_id when present,
@@ -988,7 +1050,7 @@ ipcMain.handle("get-monitors", async () => {
   const displays = screen.getAllDisplays();
   const primaryId = screen.getPrimaryDisplay().id;
   if (!displays.length) {
-    // No display info at all — fall back to whatever sources exist (or a single synthesized one).
+    // No display info at all, fall back to whatever sources exist (or a single synthesized one).
     const list = sources.length ? sources : [{ id: "screen:0:0", name: "Monitor 1" }];
     return list.map((src, i) => ({ sourceId: src.id, index: i, label: src.name || `Monitor ${i + 1}`, boundsX: 0, boundsY: 0, width: 1920, height: 1080, scaleFactor: 1, primary: i === 0 }));
   }
@@ -1007,7 +1069,7 @@ ipcMain.handle("get-monitors", async () => {
   }
   // A monitor plugged in mid-run can open the coverage gap too: remember it so the NEXT launch uses WGC.
   if (!_wgcOn && _wgcFlag && !_rdpSession && sources.length < displays.length) { try { fs.writeFileSync(_wgcFlag, "1"); } catch {} }
-  // Log the display↔source mapping when it changes — the first thing to read when a monitor won't switch.
+  // Log the display↔source mapping when it changes, the first thing to read when a monitor won't switch.
   const _map = `wgc=${_wgcOn} displays=[${displays.map((d) => `${d.id}:${d.label || "?"} ${d.size.width}x${d.size.height}@${d.scaleFactor}`).join(", ")}] sources=[${sources.map((s) => `${s.id}/${s.display_id || "-"}`).join(", ")}]`;
   if (_map !== _lastMonitorMap) { _lastMonitorMap = _map; logInfo("monitors " + _map); }
   return displays.map((d, i) => {
@@ -1139,7 +1201,7 @@ app.on("will-quit", () => { stopFast(); stopFastRecv(); });
 let captureDisplay = null;
 ipcMain.on("set-capture-display", (_e, d) => { captureDisplay = d; });
 // Which screen getDisplayMedia should feed (monitor select). Awaitable so the renderer sets it BEFORE
-// calling getDisplayMedia — avoids a race where the handler picks the wrong/first screen.
+// calling getDisplayMedia, avoids a race where the handler picks the wrong/first screen.
 // Resolves the monitor to a LIVE source now (exact id, else its OS display id) and returns whether one exists;
 // false tells the renderer to use the legacy capture path instead of letting getDisplayMedia grab another screen.
 ipcMain.handle("set-dm-source", async (_e, id, displayId) => {
@@ -1296,7 +1358,7 @@ ipcMain.handle("file-write-chunk", (e, { id, chunk }) => {
   return true;
 });
 
-// Deleting a cancelled partial file only ever touches the file THIS handle created — never a path the caller names.
+// Deleting a cancelled partial file only ever touches the file THIS handle created, never a path the caller names.
 ipcMain.handle("file-close-write", (e, { id, deleteFile }) => {
   const h = fromMain(e) ? writeHandles.get(id) : null;
   if (!h) return;
@@ -1304,7 +1366,7 @@ ipcMain.handle("file-close-write", (e, { id, deleteFile }) => {
   writeHandles.delete(id);
   if (deleteFile && h.path) { try { fs.unlinkSync(h.path); } catch {} return; }
   // Mark a successfully received file as coming from the Internet (Zone 3) so Windows SmartScreen and
-  // Office Protected View still warn before it is run/opened — a file pushed over TryDesk is untrusted.
+  // Office Protected View still warn before it is run/opened, a file pushed over TryDesk is untrusted.
   if (h.path && process.platform === "win32") {
     try { fs.writeFileSync(`${h.path}:Zone.Identifier`, "[ZoneTransfer]\r\nZoneId=3\r\n"); } catch {}
   }
@@ -1325,7 +1387,7 @@ function listDrives() {
 function listDirectory(dirPath) {
   if (!dirPath) {
     const home = os.homedir();
-    const entries = [{ name: `Home — ${path.basename(home) || home}`, path: home, isDir: true, size: 0, mtime: 0, kind: "home" }];
+    const entries = [{ name: `Home, ${path.basename(home) || home}`, path: home, isDir: true, size: 0, mtime: 0, kind: "home" }];
     for (const d of listDrives()) entries.push({ name: d, path: d, isDir: true, size: 0, mtime: 0, kind: "drive" });
     return { ok: true, path: "", display: "Komputer ini", parent: null, isRoot: true, entries };
   }

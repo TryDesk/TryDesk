@@ -1,5 +1,5 @@
 let config = null;
-let _gameActive = false;   // native game-mouse capture engaged (declared early — refreshKeyCapture reads it)
+let _gameActive = false;   // native game-mouse capture engaged (declared early, refreshKeyCapture reads it)
 let serverUrl = "";
 let ws = null;
 let myId = null;
@@ -51,13 +51,13 @@ function filePacer(ch) {
   };
 }
 
-// Quality template — a new viewer tab clones this; editing quality in a tab updates that live
+// Quality template, a new viewer tab clones this; editing quality in a tab updates that live
 // tab and persists here as the default for the next tab.
 const DEFAULT_QUALITY = { bitrate: 80, fps: 60, resHeight: 0, codec: "auto" };
 let defaultQuality = { ...DEFAULT_QUALITY };
 
 // ═══════════════════════════════════════════════════════════
-//  Per-session state — one Session per remote tab (viewer side)
+//  Per-session state, one Session per remote tab (viewer side)
 //  plus one for the host role. Every connection-bound value lives
 //  here so multiple remote tabs stay fully independent.
 // ═══════════════════════════════════════════════════════════
@@ -114,7 +114,7 @@ class Session {
     // chat (per peer)
     this.chatLog = [];
     this.chatUnread = false;
-    // video element (viewer only) — created lazily by ensureVideo()
+    // video element (viewer only), created lazily by ensureVideo()
     this.video = null;
     this.hasFrame = false;
     this.label = peerId;              // tab label (updated to monitor name when known)
@@ -177,16 +177,18 @@ function ensureVideo(sess) {
     if (sess === active) applyScale();
     // NOTE: do NOT dim here. WebRTC continuously adjusts the encoded resolution to match the
     // bandwidth estimate (especially while BWE settles in the first seconds, and under any
-    // bitrate cap) — each adjustment fires "resize". Dimming on every one of those produced the
+    // bitrate cap), each adjustment fires "resize". Dimming on every one of those produced the
     // periodic flicker users saw even on a fast link. A user-initiated monitor switch is masked by
     // the local monitor-switch handler instead.
   });
   v.addEventListener("playing", () => {
+    const first = !sess.hasFrame;
     sess.hasFrame = true; if (sess === active) $("#remote-loading")?.classList.add("hidden");
+    if (first) renderTabs();   // the tab's dot turns green with the first picture (it stayed orange before)
     // Recent-tile thumbnail: once the picture has settled (refreshed again when the session ends)
     if (sess.role === "viewer" && !sess.thumbTimer) sess.thumbTimer = setTimeout(() => saveThumb(sess), 4000);
   });
-  v.addEventListener("loadeddata", () => { if (v.videoWidth) { sess.hasFrame = true; if (sess === active) $("#remote-loading")?.classList.add("hidden"); } });
+  v.addEventListener("loadeddata", () => { if (v.videoWidth) { const first = !sess.hasFrame; sess.hasFrame = true; if (sess === active) $("#remote-loading")?.classList.add("hidden"); if (first) renderTabs(); } });
   $("#video-wrap").appendChild(v);
   sess.video = v;
   return v;
@@ -214,14 +216,15 @@ const I18N = {
     id_regenerated: "ID baru berhasil dibuat", ui_regen_id_title: "Buat ID baru", regen_failed: "Gagal membuat ID baru",
     regen_confirm_title: "Buat ID baru?", regen_confirm_ok: "Ya, buat ID baru", regen_confirm_cancel: "Batal",
     regen_confirm_msg: "ID lama Anda akan berhenti berlaku.",
-    regen_confirm_detail: "Semua orang yang menyimpan ID lama Anda tidak akan bisa terhubung lagi — mereka harus diberi ID yang baru. Sesi yang sedang aktif akan terputus.",
+    regen_confirm_detail: "Orang yang menyimpan ID lama tidak bisa tersambung lagi dan harus diberi ID yang baru. Sesi yang sedang berjalan akan terputus.",
   },
   en: {
     // static UI (data-i18n)
-    ui_desktop_this: "This Desktop", ui_your_id: "Your ID",
-    ui_id_note: "Share this ID so others can connect to your desktop",
+    ui_desktop_this: "This desktop", ui_your_id: "Your ID",
+    ui_id_note: "Give this ID to the person who will help you.",
     ui_remote_desktop: "Remote Desktop", ui_remote_id: "Remote ID",
-    ui_favorites: "Favorites", ui_recent: "Recent Connections",
+    ui_favorites: "Favorites", ui_recent: "Recent Connections", ui_recent_title: "Recent", ui_all: "All",
+    ui_quality_img: "Picture quality", ui_network: "Network", ui_service: "Windows service", ui_about: "About",
     ui_connect: "Connect", ui_settings: "Settings", ui_general: "General",
     ui_connection: "Connection", ui_security: "Security", ui_display: "Display",
     ui_audio: "Audio", ui_advanced: "Advanced", ui_language: "Interface language",
@@ -234,7 +237,7 @@ const I18N = {
     ui_connecting: "Connecting", ui_send_file: "Send File",
     ui_sort_recent: "Most recent", ui_sort_id: "ID number", ui_clear_all: "Clear all",
     // placeholders
-    ph_remote_id: "Enter an ID or IP address", ph_password: "Password (optional)",
+    ph_remote_id: "Enter an ID or IP address", ph_password: "Password (if asked)",
     // dynamic / toasts
     fav_added: "Added to favorites", fav_removed: "Removed from favorites",
     fav_add_tip: "Add to favorites", fav_remove_tip: "Remove from favorites",
@@ -248,7 +251,7 @@ const I18N = {
     id_regenerated: "New ID generated", ui_regen_id_title: "Generate new ID", regen_failed: "Failed to generate new ID",
     regen_confirm_title: "Generate a new ID?", regen_confirm_ok: "Yes, generate new ID", regen_confirm_cancel: "Cancel",
     regen_confirm_msg: "Your current ID will stop working.",
-    regen_confirm_detail: "Anyone who saved your old ID won't be able to connect anymore — you'll need to give them the new one. Any active session will disconnect.",
+    regen_confirm_detail: "Anyone who saved the old ID can no longer connect and needs the new one. A running session will disconnect.",
   },
 };
 function t(key) {
@@ -276,17 +279,78 @@ function applyLanguage(l) {
   // the text map only goes ID → EN, so switching back left it in English. Build the tiles again.
   try { if (typeof renderRecent === "function" && document.querySelector(".recent-tile")) renderRecent(); } catch {}
   try { if (typeof renderUpdateBar === "function") renderUpdateBar(); } catch {}
-  // Main process shows its own text (error dialogs, black-screen overlay, Discord presence) — keep it in step.
+  // Main process shows its own text (error dialogs, black-screen overlay, Discord presence), keep it in step.
   try { window.electronAPI.setUiLanguage && window.electronAPI.setUiLanguage(lang); } catch {}
   // The server writes some messages itself (update required, too many requests): it answers in this language.
   try { if (typeof sendSignal === "function") sendSignal({ type: "lang", lang }); } catch {}
 }
 
 // App-wide translation via a text map: the UI is authored in Indonesian, and every text node, placeholder,
-// tooltip and aria-label whose text appears here is shown in English when the language is EN — including
+// tooltip and aria-label whose text appears here is shown in English when the language is EN, including
 // text added later (toasts, menus, transfer cards, status lines) and messages that arrive from a peer or the
 // signaling server. Strings with variable parts go in TEXT_EN_PATTERNS. See trTree / trObserver below.
 const TEXT_EN = {
+  // Home: the stage sentence, one word group per text node
+  "Masukkan ID,": "Enter an ID,", "lalu": "then", "Hubungkan.": "Connect.",
+  // Control Center: labels under the live numbers
+  "gambar": "frames", "jeda": "latency", "data": "data",
+  // Full-screen dock
+  "Kontrol sesi": "Session controls", "Tombol": "Keys", "Menu": "Menu", "Jendela": "Window",
+  "Pindah ke monitor berikutnya": "Switch to the next monitor", "Keluar dari layar penuh": "Leave full screen",
+  // Settings → Keamanan, at a glance
+  "Saat ada yang meminta": "When someone asks", "Yang boleh dilakukan": "What they may do", "Setelah restart": "After a restart",
+  "Masuk dengan password": "In with the password", "Selalu tanya": "Always ask", "Mouse dan keyboard": "Mouse and keyboard",
+  "Hanya melihat": "View only", "Tetap bisa diakses": "Still reachable", "Perlu TryDesk terbuka": "Needs TryDesk open",
+  // Combined design, remaining screens
+  "Desktop ini": "This desktop", ", online": ", online", ", offline": ", offline", ", menghubungkan": ", connecting",
+  "ID baru": "New ID", "Password (jika diminta)": "Password (if asked)",
+  "PC ini meminta": "This PC asks for a", "password.": "password.",
+  "Desktop ini sedang": "This desktop is being", "dikontrol.": "controlled.",
+  "Belum ada koneksi.": "No connections yet.", "Ketik ID PC di atas": "Type a PC's ID above",
+  "PC yang pernah Anda hubungi muncul di sini, dengan gambar layar terakhirnya.": "PCs you connect to show up here, with their last screen.",
+  "Permintaan masuk": "Incoming request", "Melihat layar": "See the screen", "File": "Files", "Clipboard": "Clipboard",
+  "Anda tetap bisa memakai PC ini. Putuskan kapan saja.": "You can keep using this PC. Disconnect at any time.",
+  "lama sesi": "session time", "Dikontrol oleh": "Controlled by",
+  "tidak menjawab.": "did not answer.", "menolak.": "declined.", "sedang offline.": "is offline.", "sedang sibuk.": "is busy.",
+  "Permintaan sudah terkirim, tetapi pemilik PC itu tidak menekan Terima.": "The request arrived, but the PC's owner did not press Accept.",
+  "Minta pemilik PC menekan Terima saat layar merah muncul.": "Ask the PC's owner to press Accept when the red screen appears.",
+  "Atau minta password akses, supaya tidak perlu menunggu Terima.": "Or ask for the access password, so nobody has to press Accept.",
+  "Pemilik PC itu menekan Tolak.": "The PC's owner pressed Decline.", "Pastikan pemilik PC tahu Anda akan menyambung.": "Make sure the PC's owner knows you are connecting.",
+  "ID tidak ditemukan, atau TryDesk di PC itu tidak tersambung ke internet.": "The ID was not found, or TryDesk on that PC is not connected to the internet.",
+  "Pastikan TryDesk di PC itu terbuka dan menampilkan Online.": "Make sure TryDesk is open on that PC and shows Online.",
+  "Jika satu jaringan, coba Sambung lewat IP.": "On the same network? Try Connect by IP.",
+  "PC itu sedang dalam sesi dengan perangkat lain.": "That PC is in a session with another device.", "Coba lagi setelah sesi itu selesai.": "Try again when that session ends.",
+  "Kembali ke Beranda": "Back to Home", "Coba lagi": "Try again",
+  "Kualitas lanjutan ›": "Advanced quality ›", "Ukuran gambar": "Picture size", "Lihat saja (tanpa kontrol)": "View only (no control)",
+  "Gelapkan layar PC": "Darken the PC's screen", "Kunci mouse dan keyboard PC": "Lock the PC's mouse and keyboard",
+  "Suara dari PC (tidak tersedia)": "Sound from the PC (not available)", "Mode game": "Game mode", "Keluar penuh": "Exit full",
+  "Kirim file": "Send file", "Grid": "Grid", "Daftar": "List", "Mode game (mouse relatif)": "Game mode (relative mouse)", "Waktu tunggu": "Timeout",
+  "Terima otomatis": "Accept automatically", "Jika password benar, tidak perlu klik Terima": "If the password is right, no need to press Accept",
+  "Izin tamu": "Guest permissions", "Hanya melihat": "View only", "Yang boleh dilakukan orang yang mengontrol PC ini.": "What the person controlling this PC may do.",
+  "ID perangkat": "Device ID", "Nama, bahasa, dan": "Name, language, and", "tampilan.": "appearance.",
+  "Bagaimana PC ini terlihat oleh orang lain, dan bagaimana TryDesk terlihat oleh Anda.": "How this PC looks to others, and how TryDesk looks to you.",
+  "Tanpa password, setiap koneksi harus Anda terima dulu di layar ini. Dengan password, tamu yang tahu password langsung masuk.": "Without a password, you accept every connection on this screen first. With a password, a guest who knows it gets in directly.",
+  "Gambar dan suara": "Picture and sound", "bawaan.": "defaults.", "Dipakai setiap kali sesi baru dibuka. Saat sesi berjalan, ubah lewat Control Center.": "Used whenever a new session opens. During a session, change it in Control Center.",
+  "Waktu tunggu, sambung ulang, jalur koneksi, dan sambung lewat IP di jaringan yang sama.": "Timeout, reconnecting, the connection route, and connecting by IP on the same network.",
+  "Tetap bisa dihubungi": "Reachable", "setelah restart.": "after a restart.",
+  "Dengan layanan Windows, PC ini tetap bisa dikontrol setelah restart dan saat sesi RDP diputus, dengan ID yang sama. Versi Setup memasangnya otomatis; versi Portable tidak memakai layanan.": "With the Windows service, this PC can still be controlled after a restart and when an RDP session is disconnected, with the same ID. The Setup version installs it; the Portable version does not use the service.",
+  "Versi dan": "Version and", "data.": "data.", "Informasi TryDesk, rendering, dan mengembalikan pengaturan ke bawaan.": "About TryDesk, rendering, and resetting the settings.",
+  "Buat ID baru": "Generate new ID",
+  "Semua perangkat": "All devices", "Belum ada koneksi. PC yang pernah Anda hubungi muncul di sini.": "No connections yet. PCs you connect to show up here.", "Cara sambung lewat IP": "How to connect by IP", "Sambung ulang": "Reconnect", "Jalur koneksi": "Connection route",
+  "Sambung lewat IP,": "Connect by IP,", "tanpa internet.": "no internet needed.",
+  "Ikuti Windows": "Follow Windows", "Ikuti HP": "Follow phone", "Nama perangkat": "Device name", "Pemberitahuan": "Notifications",
+  "Nama ini terlihat oleh PC yang Anda hubungi.": "PCs you connect to see this name.",
+  "gambar/detik": "frames/s", "Paket hilang": "Packet loss",
+  "Maks": "Max", "Layar": "Screen", "lanjutan.": "settings.", "Volume": "Volume", "Gaming": "Gaming", "Control Center": "Control Center",
+  "Server sinyal": "Signal server", "Menunggu PC menerima": "Waiting for the PC to accept", "Jalur langsung (P2P)": "Direct link (P2P)",
+  "Pengaturan kualitas": "Quality settings", "Manajer file": "File manager",
+  // Settings: the sentence that opens each tab (plain part + red key word)
+  "Nama, bahasa, dan": "Name, language and", "suara.": "sound.",
+  "Cara PC ini": "How this PC", "tersambung.": "connects.",
+  "Siapa yang boleh": "Who may", "masuk.": "come in.",
+  "Gambar dan": "Picture and", "tema.": "theme.",
+  "Suara dari PC": "Sound from the", "remote.": "remote PC.",
+  "Data, rendering, dan": "Data, rendering and", "versi.": "version.",
   // General
   "Alias perangkat": "Device alias", "Simpan": "Save",
   "Tunggu transfer yang sedang berjalan selesai": "Wait for the current transfer to finish",
@@ -309,11 +373,11 @@ const TEXT_EN = {
   "PC ini belum tersambung ke jaringan lokal": "This PC is not connected to a local network yet",
   "Masukkan ID atau alamat IP": "Enter an ID or IP address",
   "Masukkan ID 9 digit atau alamat IP": "Enter a 9-digit ID or an IP address",
-  "Belum terhubung ke server — untuk PC di jaringan yang sama, ketik alamat IP-nya": "Not connected to the server — for a PC on the same network, type its IP address",
+  "Belum terhubung ke server, untuk PC di jaringan yang sama, ketik alamat IP-nya": "Not connected to the server, for a PC on the same network, type its IP address",
   "Password salah. Coba lagi.": "Wrong password. Try again.",
   "Menunggu password akses": "Waiting for the access password",
   "Koneksi LAN tidak diaktifkan di PC tujuan": "LAN connections are not turned on on the other PC",
-  "PC tujuan belum memasang password akses — koneksi lewat IP membutuhkan password": "The other PC has no access password set — connecting by IP requires one",
+  "PC tujuan belum memasang password akses, koneksi lewat IP membutuhkan password": "The other PC has no access password set, connecting by IP requires one",
   "Koneksi LAN hanya bisa dipakai setelah password akses diset (Pengaturan → Keamanan)": "LAN connections only work once an access password is set (Settings → Security)",
   "Tidak bisa membuka port LAN": "Couldn't open the LAN port",
   "Alamat IP tidak valid": "Invalid IP address",
@@ -362,7 +426,7 @@ const TEXT_EN = {
   "Dengan layanan, PC ini tetap bisa dikontrol setelah restart dan saat sesi RDP diputus (jendela RDP ditutup), seperti AnyDesk. ID PC ini tidak berubah. Tanpa password akses, setiap koneksi tetap meminta Terima. Versi Setup memasangnya otomatis.": "With the service, this PC stays controllable after a restart and while the RDP session is disconnected (RDP window closed), like AnyDesk. This PC's ID doesn't change. Without an access password, every connection still asks for Accept. The Setup version installs it automatically.",
   "Pasang layanan": "Install service", "Hapus layanan": "Remove service",
   "Layanan terpasang. ID PC ini tetap sama.": "Service installed. This PC's ID stays the same.",
-  "UAC dibatalkan — password layanan tidak berubah": "UAC cancelled — the service's password didn't change", "Password layanan gagal diubah": "The service's password couldn't be changed",
+  "UAC dibatalkan, password layanan tidak berubah": "UAC cancelled, the service's password didn't change", "Password layanan gagal diubah": "The service's password couldn't be changed",
   "PC ini memakai layanan TryDesk": "This PC uses the TryDesk service",
   "Layanan belum terpasang.": "Service not installed.",
   "Isi password akses dulu (minimal satu kali disimpan), lalu pasang layanan.": "Set an access password first, then install the service.",
@@ -370,8 +434,8 @@ const TEXT_EN = {
   "Menyimpan password ke layanan… setujui prompt UAC.": "Saving the password to the service… approve the UAC prompt.",
   "Password layanan diperbarui": "Service password updated",
   "Layanan terpasang. ID layanan muncul dalam beberapa detik.": "Service installed. Its ID appears in a few seconds.",
-  "UAC dibatalkan — layanan tidak dipasang": "UAC cancelled — service not installed",
-  "UAC dibatalkan — layanan tetap terpasang": "UAC cancelled — service still installed",
+  "UAC dibatalkan, layanan tidak dipasang": "UAC cancelled, service not installed",
+  "UAC dibatalkan, layanan tetap terpasang": "UAC cancelled, service still installed",
   "Layanan dihapus": "Service removed",
   "Layanan gagal dipasang": "Service could not be installed", "Layanan gagal dihapus": "Service could not be removed",
   "Password akses tanpa konfirmasi": "Access password (no confirmation)",
@@ -419,8 +483,8 @@ const TEXT_EN = {
   "Reset semua pengaturan ke bawaan": "Reset all settings to default",
   "Tentang": "About", "Versi": "Version", "Lisensi": "License", "Gratis (Freeware)": "Free (Freeware)",
   "Pengaturan": "Settings", "Umum": "General", "Koneksi": "Connection", "Keamanan": "Security", "Tampilan": "Display", "Lanjutan": "Advanced",
-  "Mis: PC Kantor, Laptop Rumah": "e.g. Office PC, Home Laptop",
-  "Kosong = selalu minta Accept": "Empty = always ask to Accept",
+  "Misalnya PC-Kantor": "For example Office-PC",
+  "Kosong = selalu minta Terima": "Empty = always ask to Accept",
   "Mis: 192.168.1.0/24, 10.0.0.5": "e.g. 192.168.1.0/24, 10.0.0.5",
   "Password minimal 6 karakter": "Password must be at least 6 characters",
   "Password tersimpan (ketik untuk ganti)": "Password saved (type to change)",
@@ -428,13 +492,13 @@ const TEXT_EN = {
   "Password akses": "Access password", "Masuk": "Sign in",
   "Tidak ada jawaban dari pemilik PC": "The PC's owner did not answer",
   "PC remote mengizinkan kontrol lagi": "The remote PC allows control again",
-  "Kontrol dilepas — mouse & keyboard kembali ke PC ini. Klik layar remote untuk lanjut.": "Control released — mouse & keyboard are back on this PC. Click the remote screen to carry on.",
-  "Tip: teks yang disalin sebelum tersambung tidak ikut dikirim — salin ulang setelah tersambung": "Tip: text copied before connecting is not sent — copy it again once connected",
-  "✓ Password akses aktif — koneksi dengan password ini tidak perlu klik Terima.": "✓ Access password is on — connections with this password don't need Accept.",
-  "Belum ada password akses — setiap koneksi perlu klik Terima.": "No access password yet — every connection needs Accept.",
+  "Kontrol dilepas, mouse & keyboard kembali ke PC ini. Klik layar remote untuk lanjut.": "Control released, mouse & keyboard are back on this PC. Click the remote screen to carry on.",
+  "Tip: teks yang disalin sebelum tersambung tidak ikut dikirim, salin ulang setelah tersambung": "Tip: text copied before connecting is not sent, copy it again once connected",
+  "✓ Password akses aktif. Koneksi dengan password ini tidak perlu klik Terima.": "✓ Access password is on. Connections with this password don't need Accept.",
+  "Belum ada password akses, jadi setiap koneksi perlu klik Terima.": "No access password yet, so every connection needs Accept.",
   "Hapus password akses": "Remove access password", "Tampilkan / sembunyikan": "Show / hide",
-  "Batas waktu sesi di PC remote tercapai — koneksi diputus": "The remote PC's session time limit was reached — disconnected",
-  "Koneksi P2P gagal — coba protokol Otomatis (Pengaturan → Koneksi) agar bisa lewat relay": "P2P connection failed — try the Automatic protocol (Settings → Connection) so it can use the relay",
+  "Batas waktu sesi di PC remote tercapai, koneksi diputus": "The remote PC's session time limit was reached, disconnected",
+  "Koneksi P2P gagal, coba protokol Otomatis (Pengaturan → Koneksi) agar bisa lewat relay": "P2P connection failed, try the Automatic protocol (Settings → Connection) so it can use the relay",
   "Untuk mengirim file, klik tombol Kirim File": "To send a file, click the Send File button",
   "Untuk mengirim file, buka Control Center → Fitur lainnya → Transfer file": "To send a file, open Control Center → More features → File transfer",
   "PC mengirim file, tetapi aplikasi HP belum bisa menerima file": "The PC sent a file, but the phone app can't receive files yet",
@@ -451,17 +515,17 @@ const TEXT_EN = {
   "Lewat IP, hanya password yang bisa membuka akses. Password tidak disimpan.": "Over IP, only the password opens access. The password isn't saved.",
   "Masukkan password": "Enter password", "ID TryDesk": "TryDesk ID", "Jaringan lokal": "Local network",
   "Menunggu password atau persetujuan pemilik PC": "Waiting for the password or the owner's approval", "Memeriksa password…": "Checking password…",
-  "Peminta tidak memasukkan password akses. Ia masih bisa mengetiknya — bila benar, koneksi langsung diterima.": "The requester did not enter the access password. They can still type it — if it is right, the connection is accepted at once.",
+  "Peminta tidak memasukkan password akses. Ia masih bisa mengetiknya, bila benar, koneksi langsung diterima.": "The requester did not enter the access password. They can still type it, if it is right, the connection is accepted at once.",
   "Peminta tidak memasukkan password akses.": "The requester did not enter the access password.",
   "Peminta memasukkan password yang salah dan bisa mencoba lagi.": "The requester entered a wrong password and may try again.",
-  "Password benar, tetapi \"Terima koneksi otomatis\" dimatikan di Pengaturan — jadi tetap perlu konfirmasi.": "Correct password, but \"Auto-accept\" is turned off in Settings, so confirmation is still needed.",
+  "Password benar, tetapi \"Terima koneksi otomatis\" dimatikan di Pengaturan, jadi tetap perlu konfirmasi.": "Correct password, but \"Auto-accept\" is turned off in Settings, so confirmation is still needed.",
   "Password akses dari versi lama perlu diset ulang (Pengaturan → Keamanan)": "The access password from an older version must be set again (Settings → Security)",
   "Saat jendela ditutup": "When the window is closed",
   "Tetap berjalan di system tray (PC tetap bisa dihubungi)": "Keep running in the system tray (this PC stays reachable)",
   "Tombol X menyembunyikan TryDesk ke system tray, seperti AnyDesk. Keluar sepenuhnya lewat klik kanan ikon TryDesk di tray → Keluar. Bila dimatikan, X menutup TryDesk.": "The X button hides TryDesk to the system tray, like AnyDesk. Quit completely by right-clicking the TryDesk icon in the tray → Quit. When off, X closes TryDesk.",
   "Keluar dari TryDesk?": "Quit TryDesk?", "Keluar": "Quit",
   "Jika password akses diset (tab Keamanan), koneksi dengan password benar langsung diterima tanpa konfirmasi. Matikan bila Anda tetap ingin menekan Terima walau password benar.": "If an access password is set (Security tab), connections with the correct password are accepted without confirmation. Turn this off to still click Accept even when the password is right.",
-  "Jika diset, orang yang mengontrol PC ini cukup mengetik password ini di kolom Password pada TryDesk mereka (atau saat diminta) — mereka langsung masuk tanpa Anda klik Terima. Tanpa password, Anda tetap diminta Terima.": "If set, whoever controls this PC just types this password in the Password field of their TryDesk (or when asked) and gets in without you clicking Accept. Without the password you are still asked to Accept.",
+  "Jika diset, orang yang mengontrol PC ini cukup mengetik password ini di kolom Password pada TryDesk mereka (atau saat diminta), mereka langsung masuk tanpa Anda klik Terima. Tanpa password, Anda tetap diminta Terima.": "If set, whoever controls this PC just types this password in the Password field of their TryDesk (or when asked) and gets in without you clicking Accept. Without the password you are still asked to Accept.",
   "Alias dihapus": "Alias removed",
   "Jalankan sebagai administrator?": "Run as administrator?",
   "TryDesk akan ditutup lalu dibuka lagi dengan izin administrator.": "TryDesk will close and reopen with administrator rights.",
@@ -469,11 +533,11 @@ const TEXT_EN = {
   "Batal": "Cancel", "Lanjutkan": "Continue",
   // Home + server status
   "Desktop Ini": "This Desktop", "ID Anda": "Your ID", "Menghubungkan...": "Connecting...",
-  "Bagikan ID ini agar orang lain bisa terhubung ke desktop Anda": "Share this ID so others can connect to your desktop",
+  "Berikan ID ini ke orang yang akan membantu Anda.": "Give this ID to the person who will help you.",
   "ID Remote": "Remote ID", "Hubungkan": "Connect", "Favorit": "Favorites", "Koneksi Terakhir": "Recent Connections",
-  "Terbaru": "Most recent", "Nomor ID": "ID number", "Hapus semua": "Clear all", "Baru saja": "Just now",
-  "Menghubungkan ke server...": "Connecting to server...", "Online — siap menerima koneksi": "Online — ready to accept connections",
-  "Terputus dari server — mencoba lagi...": "Disconnected from server — retrying...", "Alamat server tidak valid": "Invalid server address",
+  "Terbaru": "Most recent", "Nomor ID": "ID number", "Lainnya": "More", "Terakhir dihubungi": "Recent", "Hapus semua": "Clear all", "Baru saja": "Just now",
+  "Menghubungkan ke server...": "Connecting to server...", "Online, siap menerima koneksi": "Online, ready to accept connections",
+  "Terputus dari server, mencoba lagi...": "Disconnected from server, retrying...", "Alamat server tidak valid": "Invalid server address",
   "Salin ID": "Copy ID", "Buat ID baru": "Generate new ID", "Masukkan ID remote": "Enter remote ID", "Password (opsional)": "Password (optional)",
   "Tampilan grid": "Grid view", "Tampilan daftar": "List view", "Urutkan": "Sort", "Hapus semua riwayat": "Clear all history",
   "Perkecil": "Minimize", "Perbesar": "Maximize", "Tutup": "Close",
@@ -484,6 +548,8 @@ const TEXT_EN = {
   "Permintaan Koneksi Masuk": "Incoming Connection Request", "Dari perangkat": "From device",
   "Dapat melihat layar Anda": "Can see your screen", "Dapat mengontrol keyboard & mouse": "Can control keyboard & mouse",
   "Terima hanya jika Anda mengenal dan mempercayai pengirim.": "Only accept if you know and trust the sender.",
+  "Jangan terima jika Anda tidak sedang meminta bantuan. Orang yang mengaku dari bank, toko, atau layanan resmi tidak perlu mengontrol PC Anda.":
+    "Don't accept unless you asked for help. Someone who says they are from a bank, a shop or an official service never needs to control your PC.",
   "Dapat membuka & mengirim file di PC ini": "Can open & send files on this PC", "Berbagi clipboard (teks yang disalin)": "Shares the clipboard (copied text)",
   "Untuk mengirim file, buka Kirim File atau Manajer File": "To send files, use Send File or the File Manager",
   // Settings added/reworded in 1.1.0 + their messages
@@ -495,16 +561,16 @@ const TEXT_EN = {
   "Dipakai untuk tab remote baru. FPS di atas 120 butuh monitor host dengan refresh rate setinggi itu.": "Used for new remote tabs. Above 120 FPS needs a host monitor with that refresh rate.",
   "Memanfaatkan GPU untuk capture, encode & decode video. Nonaktifkan jika terjadi masalah tampilan. Berlaku setelah TryDesk dibuka ulang.": "Uses the GPU to capture, encode & decode video. Disable it if you see display issues. Takes effect after restarting TryDesk.",
   "Mengembalikan semua pengaturan ke bawaan. ID, favorit, dan riwayat koneksi tetap disimpan.": "Restores every setting to its default. Your ID, favorites and connection history are kept.",
-  "Kode sumber": "Source code", "Riwayat versi": "Version history", "Fitur per versi": "Features by version","AGPL-3.0 (open source, gratis)": "AGPL-3.0 (open source, free)", "Dibuat oleh": "Made by",
+  "Kode sumber": "Source code", "AGPL-3.0, gratis": "AGPL-3.0, free", "Riwayat versi": "Version history", "Fitur per versi": "Features by version","AGPL-3.0 (open source, gratis)": "AGPL-3.0 (open source, free)", "Dibuat oleh": "Made by",
   "© 2026 DrWeabo. TryDesk adalah perangkat lunak bebas di bawah lisensi GNU AGPL-3.0 dan diberikan apa adanya, tanpa garansi. Nama dan logo TryDesk adalah merek DrWeabo; versi modifikasi harus memakai nama lain.":
     "© 2026 DrWeabo. TryDesk is free software under the GNU AGPL-3.0 licence, provided as is, without warranty. The TryDesk name and logo are DrWeabo's trademarks; modified versions must use a different name.",
   "Jendela admin (mis. CMD sebagai administrator) hanya bisa dikontrol dari jarak jauh bila TryDesk dijalankan sebagai administrator. Tanpa ini layar tetap terlihat, tapi klik & ketik tidak berfungsi di jendela admin. Dialog UAC tampil di desktop aman Windows dan tidak bisa dilihat atau dikontrol dari jarak jauh.": "Admin windows (e.g. CMD run as administrator) can only be controlled remotely when TryDesk runs as administrator. Without it the screen still shows, but clicks & keystrokes won't work on admin windows. UAC prompts appear on Windows' secure desktop and can't be seen or controlled remotely.",
-  "Permintaan koneksi masuk": "Incoming connection request", "Batas waktu sesi tercapai — koneksi diputus": "Session time limit reached — disconnected",
+  "Permintaan koneksi masuk": "Incoming connection request", "Batas waktu sesi tercapai, koneksi diputus": "Session time limit reached, disconnected",
   "Berlaku setelah TryDesk dibuka ulang": "Takes effect after restarting TryDesk",
   "Reset semua pengaturan?": "Reset all settings?", "Semua pengaturan kembali ke bawaan.": "Every setting goes back to its default.",
   "ID, favorit, dan riwayat koneksi tetap disimpan. TryDesk akan dimuat ulang.": "Your ID, favorites and connection history are kept. TryDesk will reload.",
-  "Reset": "Reset", "UAC dibatalkan — TryDesk tetap berjalan tanpa hak administrator": "UAC cancelled — TryDesk keeps running without administrator rights",
-  "PC remote hanya mengizinkan melihat layar — klik & ketikan tidak dikirim": "The remote PC only allows viewing — clicks & keystrokes aren't sent",
+  "Reset": "Reset", "UAC dibatalkan, TryDesk tetap berjalan tanpa hak administrator": "UAC cancelled, TryDesk keeps running without administrator rights",
+  "PC remote hanya mengizinkan melihat layar, klik & ketikan tidak dikirim": "The remote PC only allows viewing, clicks & keystrokes aren't sent",
   "Gagal: file tidak lengkap": "Failed: file incomplete",
   "Kunci input dilepas oleh pengguna di PC remote": "Input lock released by the user on the remote PC",
   "Layar gelap dilepas oleh pengguna di PC remote": "Black screen released by the user on the remote PC",
@@ -518,8 +584,8 @@ const TEXT_EN = {
   "Perangkat ini adalah TryDesk untuk HP (hanya mengontrol PC) dan tidak bisa dikontrol": "That device runs TryDesk for phones (it only controls PCs) and can't be controlled",
   "Terlalu banyak percobaan, coba lagi nanti": "Too many attempts, try again later", "Waktu verifikasi habis": "Verification timed out",
   "Password salah": "Wrong password", "Remote gagal membagikan layar": "The remote failed to share its screen",
-  "Koneksi gagal — relay TURN tidak terjangkau": "Connection failed — TURN relay unreachable",
-  "Koneksi P2P gagal — server belum menyediakan TURN relay": "P2P connection failed — the server has no TURN relay yet",
+  "Koneksi gagal, relay TURN tidak terjangkau": "Connection failed, TURN relay unreachable",
+  "Koneksi P2P gagal, server belum menyediakan TURN relay": "P2P connection failed, the server has no TURN relay yet",
   "Koneksi terputus": "Connection lost", "ID tidak ditemukan atau sedang offline": "ID not found or offline",
   "Remote desktop sedang dalam sesi lain": "The remote desktop is in another session",
   "Tidak bisa me-remote PC Anda sendiri": "You can't remote into your own PC",
@@ -581,21 +647,25 @@ const TEXT_EN = {
   "Perekaman tidak didukung": "Recording isn't supported", "Rekaman dibatalkan": "Recording cancelled",
   "Kontrol aktif kembali": "Control active again", "Sambungkan remote baru": "Connect a new remote",
   // Game mode
-  "Mode lihat saja aktif — matikan dulu untuk mode game": "View-only mode is on — turn it off for game mode",
-  "🎮 Mode game aktif — tekan Pause (atau Ctrl+Alt+Shift+Esc) untuk lepas kontrol": "🎮 Game mode on — press Pause (or Ctrl+Alt+Shift+Esc) to release control",
-  "🎮 Mode game aktif — tekan Esc untuk lepas mouse": "🎮 Game mode on — press Esc to release the mouse",
+  "Mode lihat saja aktif, matikan dulu untuk mode game": "View-only mode is on, turn it off for game mode",
+  "🎮 Mode game aktif, tekan Pause (atau Ctrl+Alt+Shift+Esc) untuk lepas kontrol": "🎮 Game mode on, press Pause (or Ctrl+Alt+Shift+Esc) to release control",
+  "🎮 Mode game aktif, tekan Esc untuk lepas mouse": "🎮 Game mode on, press Esc to release the mouse",
   "Mode game: klik layar untuk ambil kontrol mouse": "Game mode: click the screen to take mouse control",
   "Mouse tidak bisa dikunci untuk mode game (pointer lock ditolak)": "Couldn't lock the mouse for game mode (pointer lock refused)",
-  "Mode game aktif — gerakan mouse relatif. Tekan Esc untuk keluar": "Game mode on — relative mouse movement. Press Esc to exit",
+  "Mode game aktif, gerakan mouse relatif. Tekan Esc untuk keluar": "Game mode on, relative mouse movement. Press Esc to exit",
   "Mode game nonaktif": "Game mode off",
-  "Kontrol dilepas — mouse & keyboard kembali ke PC ini (buka game lagi untuk lanjut)": "Control released — mouse & keyboard are back on this PC (open the game again to continue)",
+  "Kontrol dilepas, mouse & keyboard kembali ke PC ini (buka game lagi untuk lanjut)": "Control released, mouse & keyboard are back on this PC (open the game again to continue)",
   // Chat
-  "Chat": "Chat", "Belum ada pesan": "No messages yet", "Pesan baru": "New message", "Anda": "You", "Kirim": "Send", "Ketik pesan...": "Type a message...",
+  "Chat": "Chat", "Belum ada pesan": "No messages yet", "Pesan baru": "New message", "Anda": "You", "Kirim": "Send", "Ketik pesan": "Type a message",
+  "Tutup Control Center": "Close Control Center", "Perangkat": "Devices", "Semua": "All", "Kembali": "Back",
+  "Memuat aplikasi": "Loading the app", "Nama PC": "PC name", "Kirim kombinasi tombol": "Send a key combination",
+  "Jika password akses diset, koneksi dengan password benar langsung diterima tanpa konfirmasi. Matikan bila Anda tetap ingin menekan Terima walau password benar.": "With an access password set, a connection with the right password is let in without asking. Turn this off if you still want to press Accept even when the password is right.",
+  "PC lain di jaringan yang sama bisa tersambung dengan mengetik alamat IP PC ini, tanpa internet. Wajib memakai password akses minimal 10 karakter (Keamanan). Saat pertama dinyalakan, Windows akan meminta izin firewall.": "Other PCs on the same network can connect by typing this PC's IP address, without internet. Needs an access password of at least 10 characters (Security). The first time it is turned on, Windows asks for firewall permission.",
   // File transfer + file manager
   "Belum siap untuk transfer": "Not ready to transfer yet", "Satu transfer dulu, lalu ulangi": "One transfer at a time, then try again",
   "Menunggu persetujuan...": "Waiting for approval...", "Dibatalkan": "Cancelled", "Ditolak": "Rejected", "Terkirim": "Sent",
   "Dibatalkan pengirim": "Cancelled by sender", "ukuran file tidak diketahui": "file size unknown", "H.264 · jalur cepat": "H.264 · fast path","Transfer file dinonaktifkan di host": "File transfer is disabled on the host",
-  "Manajer File": "File Manager", "Komputer ini": "This computer", "Komputer remote": "Remote computer",
+  "Manajer File": "File Manager", "Komputer ini": "This computer", "Komputer remote": "Remote computer", "Kirim file ke": "Send files to", "PC ini": "This PC",
   "Nama": "Name", "Tanggal": "Date", "Tipe": "Type", "Ukuran": "Size", "Unduh": "Download", "Folder": "Folder",
   "Antrean transfer": "Transfer queue", "Bersihkan": "Clear", "Mulai transfer": "Start transfer", "Memuat…": "Loading…",
   "Folder kosong": "Empty folder", "Pilih folder tujuan dulu": "Choose a destination folder first",
@@ -613,11 +683,21 @@ const TEXT_EN = {
 for (const [k, v] of Object.entries(I18N.id)) if (I18N.en[k] && !(v in TEXT_EN)) TEXT_EN[v] = I18N.en[k];
 // Strings with a variable part (an ID, a path, a count…). A function replacement can translate the inner part too.
 const TEXT_EN_PATTERNS = [
-  [/^✓ Layanan terpasang( \(berhenti\))?( — ID layanan: ([\d ]+))?$/, (_m, stopped, _i, id) => "✓ Service installed" + (stopped ? " (stopped)" : "") + (id ? " — service ID: " + id : "")],
+  [/^✓ Layanan terpasang( \(berhenti\))?(, ID layanan: ([\d ]+))?$/, (_m, stopped, _i, id) => "✓ Service installed" + (stopped ? " (stopped)" : "") + (id ? ", service ID: " + id : "")],
   [/^PC ini memakai layanan TryDesk\. Sambung ke ID ([\d ]+)$/, "This PC uses the TryDesk service. Connect to ID $1"],
   [/^Kembali ke sesi (.+)$/, "Back to session $1"],
   [/^Kembali ke (\d+) sesi berjalan$/, "Back to $1 running sessions"],
-  [/^(.+) meminta password akses — buka tab tersebut$/, "$1 asks for its access password — open that tab"],
+  [/^Sesi dengan (.+) masih berjalan$/, "Your session with $1 is still running"],
+  [/^Seseorang ingin mengontrol desktop ini\.$/, "Someone wants to control this desktop."],
+  [/^(.+) ingin mengontrol desktop ini\.$/, "$1 wants to control this desktop."],
+  [/^Ditolak otomatis dalam (\d+) detik$/, "Declined automatically in $1 seconds"],
+  [/^Dikontrol oleh (.+)$/, "Controlled by $1"],
+  [/^Menyambung ke (.+)$/, "Connecting to $1"],
+  [/^Periksa ID: (.+)$/, "Check the ID: $1"],
+  [/^Kualitas lanjutan \((.+)\) ›$/, "Advanced quality ($1) ›"],
+  [/^dengan (\d{3} \d{3} \d{3}|\S+)$/, "with $1"],
+  [/^(\d+) sesi masih berjalan$/, "$1 sessions are still running"],
+  [/^(.+) meminta password akses, buka tab tersebut$/, "$1 asks for its access password, open that tab"],
   [/^Menyambung ulang ke (.+) \((\d+)\/(\d+)\)…$/, "Reconnecting to $1 ($2/$3)…"],
   [/^Meminta akses ke (.+)\.\.\.$/, "Requesting access to $1..."],
   [/^Terhubung ke (.+)$/, "Connected to $1"],
@@ -645,6 +725,7 @@ const TEXT_EN_PATTERNS = [
   [/^Tidak bisa membuka folder$/, "Can't open folder"],
   [/^Gagal mengunci mouse untuk game: (.+)$/, "Couldn't lock the mouse for game mode: $1"],
   [/^(\d+) menit lalu$/, "$1 min ago"], [/^(\d+) jam lalu$/, "$1 h ago"], [/^(\d+) hari lalu$/, "$1 d ago"],
+  [/^Layar (\d+)$/, "Screen $1"],
 ];
 
 function trCore(core) {
@@ -707,8 +788,49 @@ const trObserver = new MutationObserver((muts) => {
 });
 trObserver.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: TR_ATTRS });
 
+// ─── Motion (Konsep Desain, direction A) ──────────────────
+// The 130 bpm grid from the portfolio video: a quarter beat 115 ms (buttons), half 230 ms (panels), one beat 460 ms
+// (a screen). Headings rise word by word from behind their line when a screen opens, 115 ms apart, with a small
+// spring and no bounce. The words are wrapped only while they move, then the heading's own HTML comes back, so
+// the ID/EN translator keeps seeing whole sentences. Nothing moves under "reduce motion".
+const motionOff = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+function riseWords(el) {
+  if (!el || motionOff() || el.offsetParent === null || el.dataset.rising) return;
+  const src = el.innerHTML;
+  let i = 0;
+  const wrap = (node) => {
+    for (const n of [...node.childNodes]) {
+      if (n.nodeType === 3) {
+        const parts = n.textContent.split(/(\s+)/);
+        if (!n.textContent.trim()) continue;
+        const frag = document.createDocumentFragment();
+        for (const p of parts) {
+          if (!p) continue;
+          if (/^\s+$/.test(p)) { frag.append(p); continue; }
+          const outer = document.createElement("span"); outer.className = "rw";
+          const inner = document.createElement("span"); inner.textContent = p; inner.style.setProperty("--i", i++);
+          outer.append(inner); frag.append(outer);
+        }
+        n.replaceWith(frag);
+      } else if (n.nodeType === 1 && n.tagName !== "BR") wrap(n);
+    }
+  };
+  el.dataset.rising = "1";
+  wrap(el);
+  setTimeout(() => { el.innerHTML = src; delete el.dataset.rising; }, 460 + i * 115 + 60);
+}
+// A whole screen or page arriving (one beat): the container fades up 8 px, its heading rises.
+function arrive(el, heading) {
+  if (!el || motionOff()) return;
+  el.classList.remove("td-arrive"); void el.offsetWidth; el.classList.add("td-arrive");
+  if (heading) riseWords(heading);
+}
+
 // ─── UI helpers ───────────────────────────────────────────
 function showScreen(name) {
+  const wasHidden = $(`#screen-${name}`)?.classList.contains("hidden");
+  $("#fail-view")?.classList.add("hidden");
+  if (name !== "home") document.documentElement.classList.remove("devices-open");
   for (const s of ["home", "connecting", "remote", "hosting"]) {
     $(`#screen-${s}`).classList.toggle("hidden", s !== name);
   }
@@ -717,21 +839,31 @@ function showScreen(name) {
   refreshKeyCapture();
   renderBackPill();
   renderAdminBanner();
+  if (typeof fsDockSync === "function") fsDockSync();
+  if (typeof closeTileMenu === "function") closeTileMenu();   // a device's ⋮ menu must not float over another screen
+  if (wasHidden) {
+    const scr = $(`#screen-${name}`);
+    arrive(scr, name === "home" ? scr.querySelector(".stage-title") : name === "hosting" ? scr.querySelector(".host-title") : null);
+  }
 }
 
-// Sessions keep running while Home ("＋") or a connecting tab is on screen — always offer the way back to them.
+// Sessions keep running while Home ("＋") or a connecting tab is on screen, always offer the way back to them.
 function renderBackPill() {
   const pill = $("#back-to-session"); if (!pill) return;
   const shown = ["home", "connecting", "hosting"].find((n) => !$(`#screen-${n}`).classList.contains("hidden"));
   const live = viewerSessions().filter((s) => s.pc && !(shown === "connecting" && s === active));
   pill.classList.toggle("hidden", !shown || !live.length);
+  // Desktop: a red band under the title bar (concept), so the band pushes the screen down instead of covering it.
+  document.documentElement.classList.toggle("has-back-band", !!shown && !!live.length);
   if (!live.length) return;
   const target = live.includes(active) ? active : live[live.length - 1];
   pill._target = target;
-  pill.querySelector("span").textContent = live.length > 1 ? `Kembali ke ${live.length} sesi berjalan` : `Kembali ke sesi ${fmtId(target.peerId)}`;
+  const who = peerName(target.peerId) || fmtId(target.peerId);
+  pill.querySelector(".bp-text").textContent = live.length > 1 ? `${live.length} sesi masih berjalan` : `Sesi dengan ${who} masih berjalan`;
+  pill.querySelector(".bp-go").textContent = isPhoneUi() ? (live.length > 1 ? `Kembali ke ${live.length} sesi berjalan` : `Kembali ke sesi ${fmtId(target.peerId)}`) : "Kembali ke sesi";
 }
 
-// Full keyboard capture (native hook — forwards Alt+Tab, Win, Alt+Esc etc. to the remote even outside
+// Full keyboard capture (native hook, forwards Alt+Tab, Win, Alt+Esc etc. to the remote even outside
 // fullscreen) is ON only while we're actively controlling a remote PC: off on Home/Hosting, in view-only,
 // and while typing in a local field so the user can still use TryDesk's own inputs.
 let _kbReleased = false;   // Pause / Ctrl+Alt+Shift+Esc gave the keyboard back; a click on the remote view takes it again
@@ -776,14 +908,14 @@ function _constEq(a, b) {
   return diff === 0;
 }
 // HMAC-SHA256(keyBytes, msg) → hex. Used for the server-blind access-password challenge/response:
-// the signaling server relays only the salt, a one-shot nonce and this HMAC — never the password.
+// the signaling server relays only the salt, a one-shot nonce and this HMAC, never the password.
 async function _hmacHex(keyBytes, msg) {
   const k = await crypto.subtle.importKey("raw", keyBytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
   const sig = await crypto.subtle.sign("HMAC", k, new TextEncoder().encode(String(msg)));
   return _hex(sig);
 }
 // Viewer side: prove knowledge of the access password against the host's challenge, without the
-// password ever leaving this machine. Key = PBKDF2(password, salt) — the exact bytes the host stored.
+// password ever leaving this machine. Key = PBKDF2(password, salt), the exact bytes the host stored.
 async function answerChallenge(pw, saltHex, nonce) {
   const keyBytes = new Uint8Array(await _pbkdf2(pw || "", _hexToBytes(saltHex)));
   return _hmacHex(keyBytes, nonce);
@@ -862,7 +994,7 @@ const TILE_ICON = {
   copy: `<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/>`,
   star: `<path d="${STAR_PATH}"/>`,
   rename: `<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z"/>`,
-  remove: `<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>`,
+  remove: `<path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/>`,   /* a bin, as drawn in the concept */
   more: `<circle cx="12" cy="5" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="12" cy="19" r="1.6"/>`,
 };
 const tileSvg = (inner, size = 16) => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
@@ -889,11 +1021,14 @@ function makeTile(id, time, opts = {}) {
   // A LAN tile shows the bare address (the "(LAN)" suffix would be cut off) and says LAN on the line below.
   const lanAddr = /^lan:/.test(id) ? id.slice(4) : "";
   const idEl = document.createElement("div"); idEl.className = "tile-id"; idEl.textContent = name || lanAddr || fmtId(id);
+  // Concept: name, then the ID, then the time, each on its own line (a PC without a name shows its ID as the name).
   const subEl = document.createElement("div"); subEl.className = "tile-sub";
-  if (name) { const pid = document.createElement("span"); pid.className = "tile-sub-id"; pid.textContent = lanAddr || fmtId(id); subEl.append(pid, " · "); }
-  if (lanAddr) subEl.append("LAN · ");
-  const tm = document.createElement("span"); tm.textContent = time; subEl.appendChild(tm);
-  meta.append(idEl, subEl);
+  if (name) { const pid = document.createElement("span"); pid.className = "tile-sub-id"; pid.textContent = lanAddr || fmtId(id); subEl.append(pid); }
+  if (lanAddr) subEl.append(name ? " · LAN" : "LAN");
+  const tm = document.createElement("div"); tm.className = "tile-time"; tm.textContent = time;
+  meta.append(idEl);
+  if (subEl.childNodes.length) meta.append(subEl);
+  meta.append(tm);
   const more = document.createElement("button");
   more.className = "tile-more"; more.title = "Opsi lainnya"; more.setAttribute("aria-haspopup", "menu");
   more.innerHTML = tileSvg(TILE_ICON.more, 16);
@@ -902,8 +1037,9 @@ function makeTile(id, time, opts = {}) {
     const r = more.getBoundingClientRect();
     openTileMenu(id, el, { fav: opts.fav, x: r.right, y: r.bottom + 4, alignRight: true });
   });
-  const foot = document.createElement("div"); foot.className = "tile-foot"; foot.append(meta, more);
-  el.append(preview, foot, makeStarBtn(id, true));
+  // The star sits beside the ⋮ under the picture (concept), not on top of the remote screen.
+  const foot = document.createElement("div"); foot.className = "tile-foot"; foot.append(meta, makeStarBtn(id, true), more);
+  el.append(preview, foot);
   el.addEventListener("click", () => {
     if (el._longPressed) { el._longPressed = false; return; }
     if (el.querySelector(".tile-rename")) return;
@@ -938,6 +1074,16 @@ function renderSessionsView() {
   const empty = $("#sess-empty");
   empty.textContent = shown ? "" : q ? "Tidak ada yang cocok dengan pencarian." : homeTab === "fav" ? (isPhoneUi() ? "Belum ada favorit. Ketuk ⋮ pada sebuah perangkat, lalu pilih Tambah ke favorit." : "Belum ada favorit. Klik bintang pada sebuah perangkat untuk menyimpannya di sini.") : "Belum ada koneksi. Perangkat yang pernah Anda hubungi muncul di sini.";
   empty.classList.toggle("hidden", !!shown);
+  // First run (no history at all): the empty state also offers the one action that fills it (direction A).
+  if (!shown && !q && homeTab !== "fav" && !recentN) {
+    // Concept: one bold line, one line on what will appear here, then the one action.
+    const head = document.createElement("b"); head.className = "sess-empty-title"; head.textContent = "Belum ada koneksi.";
+    const sub = document.createElement("span"); sub.className = "sess-empty-sub"; sub.textContent = "PC yang pernah Anda hubungi muncul di sini, dengan gambar layar terakhirnya.";
+    empty.replaceChildren(head, sub);
+    const go = document.createElement("button"); go.type = "button"; go.className = "sess-empty-go"; go.textContent = "Ketik ID PC di atas";
+    go.addEventListener("click", () => { if (isPhoneUi()) document.querySelector('.m-tab[data-tab="connect"]')?.click(); remoteIdInput.focus(); });
+    empty.append(go);
+  }
 }
 function renderRecent() {
   const q = sessQuery();
@@ -947,11 +1093,44 @@ function renderRecent() {
   list.replaceChildren();
   for (const r of recent) list.appendChild(makeTile(r.id, formatTime(r.time), { fav: false, thumbs }));
   renderSessionsView();
+  renderRecentStrip(thumbs);
+}
+
+// ─── Beranda strip (first concept, picture 1): the four latest PCs; "Semua perangkat (n)" opens the full list ───
+function renderRecentStrip(thumbs = getThumbs()) {
+  const row = $("#rs-row"); if (!row) return;
+  const all = [...getRecent()].sort((a, b) => b.time - a.time);
+  const ids = new Set([...all.map((r) => r.id), ...getFavorites().map((f) => f.id)]);
+  $("#rs-count").textContent = ids.size;
+  row.replaceChildren();
+  if (!all.length) {
+    const e = document.createElement("p"); e.className = "rs-empty";
+    e.textContent = "Belum ada koneksi. PC yang pernah Anda hubungi muncul di sini.";
+    row.appendChild(e); return;
+  }
+  for (const r of all.slice(0, 4)) {
+    const id = r.id, name = peerName(id), lanAddr = /^lan:/.test(id) ? id.slice(4) : "";
+    const b = document.createElement("button"); b.type = "button"; b.className = "rs-item";
+    b.title = `${t("ui_connect")} ${name ? `${name} (${lanAddr || fmtId(id)})` : lanAddr || fmtId(id)}`;
+    const pic = document.createElement("span"); pic.className = "rs-thumb";
+    if (thumbs[id]) { const img = new Image(); img.alt = ""; img.draggable = false; img.src = thumbs[id]; pic.appendChild(img); } else pic.innerHTML = MONITOR_SVG;
+    const txt = document.createElement("span"); txt.className = "rs-text";
+    const n = document.createElement("b"); n.textContent = name || lanAddr || fmtId(id);
+    const sub = document.createElement("small"); sub.textContent = name ? (lanAddr || fmtId(id)) : formatTime(r.time);
+    txt.append(n, sub); b.append(pic, txt);
+    b.addEventListener("click", () => connectFromTile(id));
+    b.addEventListener("contextmenu", (e) => { e.preventDefault(); openTileMenu(id, b, { x: e.clientX, y: e.clientY }); });
+    row.appendChild(b);
+  }
+}
+function setDevicesOpen(on) {
+  document.documentElement.classList.toggle("devices-open", !!on);
+  if (on) { closeTileMenu(); if (!isPhoneUi()) arrive($(".hcard-sessions"), $(".dev-title")); setTimeout(() => $("#sess-search")?.focus({ preventScroll: true }), 50); }
 }
 
 // ─── Tile menu (⋮, right-click, long-press): AnyDesk's Recent Sessions menu ───
 let tileMenuEl = null;
-function closeTileMenu() { if (tileMenuEl) { tileMenuEl.remove(); tileMenuEl = null; } }
+function closeTileMenu() { if (tileMenuEl) { tileMenuEl.remove(); tileMenuEl = null; } $(".tile-scrim")?.remove(); }
 function openTileMenu(id, tile, { fav = false, x = 0, y = 0, alignRight = false } = {}) {
   closeTileMenu(); closeAllMenus();
   const phone = isPhoneUi();
@@ -965,19 +1144,33 @@ function openTileMenu(id, tile, { fav = false, x = 0, y = 0, alignRight = false 
     "-",
     [starred ? t("fav_remove_tip") : t("fav_add_tip"), TILE_ICON.star, () => toggleFavorite(id)],
     ["Ganti nama", TILE_ICON.rename, () => startRename(id, tile)],
-    !fav && ["Hapus dari riwayat", TILE_ICON.remove, () => removeRecent(id)],
+    !fav && "-",
+    !fav && ["Hapus dari riwayat", TILE_ICON.remove, () => removeRecent(id), true],
   ].filter(Boolean);
   const m = document.createElement("div");
   m.className = "tile-menu"; m.setAttribute("role", "menu");
   const head = document.createElement("div"); head.className = "tile-menu-head";
-  const shown = lanAddr ? `${lanAddr} · LAN` : id;
-  head.textContent = peerName(id) ? `${peerName(id)} · ${shown}` : shown;
+  const shown = lanAddr ? `${lanAddr} · LAN` : fmtId(id);
+  if (phone) {
+    // Phone sheet (concept): the PC's last picture, its name, its ID, so the sheet says which PC it is about.
+    head.classList.add("tile-menu-card");
+    const pic = tile?.querySelector(".tile-preview")?.cloneNode(true);
+    if (pic) { pic.querySelectorAll("button").forEach((b) => b.remove()); pic.classList.add("tmc-pic"); head.appendChild(pic); }
+    const txt = document.createElement("div"); txt.className = "tmc-text";
+    const nm = document.createElement("b"); nm.textContent = peerName(id) || shown;
+    txt.appendChild(nm);
+    if (peerName(id)) { const sub = document.createElement("span"); sub.textContent = shown; txt.appendChild(sub); }
+    head.appendChild(txt);
+    const scrim = document.createElement("div"); scrim.className = "tile-scrim";
+    scrim.addEventListener("pointerdown", () => closeTileMenu());
+    document.body.appendChild(scrim);
+  } else head.textContent = peerName(id) ? `${peerName(id)} · ${shown}` : shown;
   m.appendChild(head);
   for (const it of items) {
     if (it === "-") { const sep = document.createElement("div"); sep.className = "tile-menu-sep"; m.appendChild(sep); continue; }
-    const [label, icon, fn] = it;
+    const [label, icon, fn, danger] = it;
     const b = document.createElement("button");
-    b.className = "cc-item"; b.setAttribute("role", "menuitem");
+    b.className = "cc-item" + (danger ? " danger" : ""); b.setAttribute("role", "menuitem");
     b.innerHTML = tileSvg(icon); b.append(document.createTextNode(label));
     b.addEventListener("click", (e) => { e.stopPropagation(); closeTileMenu(); fn(); });
     m.appendChild(b);
@@ -1088,7 +1281,7 @@ function fmtDuration(totalSec) {
   return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
 }
 function startHostingTimer() {
-  stopHostingTimer();               // (stop first — it clears the start time)
+  stopHostingTimer();               // (stop first, it clears the start time)
   hostingStartTime = Date.now();
   hostingTimerHandle = setInterval(() => {
     const el = $("#hosting-timer");
@@ -1146,7 +1339,7 @@ function connectSignaling() {
   ws.onclose = () => {
     myId = null; myIdText.textContent = "Offline";
     try { window.electronAPI.setTrayInfo?.({ id: "" }); } catch {}
-    setStatus("error", "Terputus dari server — mencoba lagi...");
+    setStatus("error", "Terputus dari server, mencoba lagi...");
     reconnectTimer = setTimeout(connectSignaling, 3000);
   };
 }
@@ -1181,8 +1374,8 @@ async function sdpMacOk(s, kind, desc, mac) {
 // Two PCs on one network start a session without the signaling server (an office or a warnet PC with no internet,
 // like AnyDesk's "direct connection"). main.js (or the phone's TdLan plugin) only carries JSON lines over TCP; this
 // part speaks the same messages the server relays, so the rest of the app can't tell the difference. Peer ids:
-//   "lan:<address>"     — a PC this one asks (viewer tab), address = what the user typed ("192.168.1.20[:7171]")
-//   "lan-in:<ip>#<n>"   — a PC asking this one (host side), one id per socket
+//   "lan:<address>"    , a PC this one asks (viewer tab), address = what the user typed ("192.168.1.20[:7171]")
+//   "lan-in:<ip>#<n>"  , a PC asking this one (host side), one id per socket
 // Rules that the server enforces elsewhere are enforced here instead: the host refuses any LAN request unless an
 // access password is set, only a correct password gets in (no Accept-dialog fallback for strangers on the network),
 // and the offer/answer carry an HMAC under the password key, so someone else on the network can't swap the
@@ -1402,26 +1595,26 @@ async function onSignal(msg) {
       serverSdpMac = msg.sdpMac === true;
       myIdText.textContent = fmtId(shownId());
       try { window.electronAPI.setTrayInfo?.({ id: fmtId(shownId()) }); } catch {}
-      setStatus("connected", "Online — siap menerima koneksi");
+      setStatus("connected", "Online, siap menerima koneksi");
       if (_regenPending) { _regenPending = false; showToast(t("id_regenerated") + ": " + fmtId(myId)); }
       break;
     }
     case "incoming-connection": handleIncoming(msg); break;
     case "request-cancelled": {
       // The requester gave up (Cancel / went offline) while we were still asking. Close the accept dialog or
-      // drop the password challenge — accepting a dead request left the host capturing and "busy" for good.
+      // drop the password challenge, accepting a dead request left the host capturing and "busy" for good.
       if (acceptFromId === msg.fromId && acceptDlgCancel) acceptDlgCancel();
       if (pendingChallenge && pendingChallenge.fromId === msg.fromId) { clearTimeout(pendingChallenge._t); pendingChallenge = null; }
       break;
     }
     case "connection-challenge": {
-      // Host requires an access password. Prove we know it via HMAC over the host's nonce — the password itself
+      // Host requires an access password. Prove we know it via HMAC over the host's nonce, the password itself
       // never travels. First round: the typed password, else an "empty" answer (the host
       // then shows its owner the Accept dialog). Another round means the host is still asking (no password, or
-      // a wrong one) while its owner sees Accept: let the user type it here — whichever comes first wins.
+      // a wrong one) while its owner sees Accept: let the user type it here, whichever comes first wins.
       const s = sessions.get(msg.fromId);
       if (!s || s.role !== "viewer" || s.pc) return;
-      // The host answered — it is now up to its owner (30 s dialog) or to the password; our own "no response"
+      // The host answered, it is now up to its owner (30 s dialog) or to the password; our own "no response"
       // timeout must not close the tab while the user is typing the password.
       clearTimeout(s.requestTimer);
       const salt = String(msg.salt || ""), nonce = String(msg.nonce || "");
@@ -1455,7 +1648,9 @@ async function onSignal(msg) {
       // The reason comes from the other side, so only TryDesk's own texts are shown (see knownPeerText).
       const reason = knownPeerText(msg.reason, "Koneksi ditolak");
       sessLog(s, "rejected: " + reason.slice(0, 80));
-      closeSession(s, false); showToast(reason);
+      const fg = s === active && !s.isReconnect;
+      closeSession(s, false);
+      if (!(fg && showFailView(s.peerId, reason === "Tidak ada jawaban dari pemilik PC" ? "noanswer" : reason === "Koneksi ditolak" ? "rejected" : ""))) showToast(reason);
       reconnectFailed(s, reason);
       break;
     }
@@ -1507,12 +1702,54 @@ async function onSignal(msg) {
       const s = msg.targetId ? sessions.get(msg.targetId) : active;
       const text = serverErrorText(msg);
       if (s) sessLog(s, "server: " + String(msg.code || msg.message || "").slice(0, 80));
-      if (s && s.role === "viewer" && s.pc == null) { closeSession(s, false); reconnectFailed(s, ""); }   // offline / busy: try again later
-      showToast(text);
+      let failShown = false;
+      if (s && s.role === "viewer" && s.pc == null) {
+        const fg = s === active && !s.isReconnect;
+        closeSession(s, false); reconnectFailed(s, "");   // offline / busy: try again later
+        const kind = { offline: "offline", "host-offline": "offline", busy: "busy" }[msg.code] || (text === SERVER_ERROR_TEXT.offline ? "offline" : "");
+        if (fg) failShown = showFailView(s.peerId, kind);
+      }
+      if (!failShown) showToast(text);
       break;
     }
   }
 }
+
+// ─── Gagal tersambung (concept): the PC, why it did not connect, three things to try, Coba lagi ───
+const FAIL_KINDS = {
+  noanswer: { verdict: "tidak menjawab.", sub: "Permintaan sudah terkirim, tetapi pemilik PC itu tidak menekan Terima.",
+    tips: ["Minta pemilik PC menekan Terima saat layar merah muncul.", "Atau minta password akses, supaya tidak perlu menunggu Terima.", "ID: {id}"] },
+  rejected: { verdict: "menolak.", sub: "Pemilik PC itu menekan Tolak.",
+    tips: ["Pastikan pemilik PC tahu Anda akan menyambung.", "ID: {id}"] },
+  offline: { verdict: "sedang offline.", sub: "ID tidak ditemukan, atau TryDesk di PC itu tidak tersambung ke internet.",
+    tips: ["Pastikan TryDesk di PC itu terbuka dan menampilkan Online.", "Periksa ID: {id}", "Jika satu jaringan, coba Sambung lewat IP."] },
+  busy: { verdict: "sedang sibuk.", sub: "PC itu sedang dalam sesi dengan perangkat lain.",
+    tips: ["Coba lagi setelah sesi itu selesai.", "ID: {id}"] },
+};
+let failPeer = null;
+function showFailView(peerId, kind) {
+  const k = FAIL_KINDS[kind];
+  if (!k || !peerId) return false;
+  failPeer = peerId;
+  const shownId = /^lan:/.test(peerId) ? peerId.slice(4) : fmtId(peerId);
+  $("#fail-who").textContent = peerName(peerId) || shownId;
+  $("#fail-verdict").textContent = k.verdict;
+  $("#fail-sub").textContent = k.sub;
+  $("#fail-tips").replaceChildren(...k.tips.map((tip) => { const li = document.createElement("li"); li.textContent = tip.replace("{id}", shownId); return li; }));
+  if (!sessions.size || viewerSessions().every((x) => !x.pc)) showScreen("home");
+  if ($("#screen-home").classList.contains("hidden")) return false;   // another session is on screen: a toast is enough
+  $("#fail-view").classList.remove("hidden");
+  $("#fail-retry").focus({ preventScroll: true });
+  return true;
+}
+$("#fail-home").addEventListener("click", () => { $("#fail-view").classList.add("hidden"); });
+$("#fail-retry").addEventListener("click", () => {
+  $("#fail-view").classList.add("hidden");
+  if (!failPeer) return;
+  remoteIdInput.value = /^lan:/.test(failPeer) ? failPeer.slice(4) : failPeer;
+  initiateConnection();
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#fail-view").classList.contains("hidden")) $("#fail-view").classList.add("hidden"); });
 // What a server error shows. The server names a code (1.3.3+) and TryDesk has its own text for it; an older server
 // sends one of a few fixed texts, which are shown only when they are TryDesk's own. Anything else gets a plain
 // message: the server must not be able to put arbitrary text in front of the user.
@@ -1553,16 +1790,16 @@ function initiateConnection(target, password, { background = false } = {}) {
   const fromUi = typeof target !== "string";
   if (updateRequired) return showToast(UPDATE_REFUSED);
   const typed = fromUi ? remoteIdInput.value.trim() : target;
-  // An IP address (or a LAN PC name) goes straight to that PC — no server, so no need to be online.
+  // An IP address (or a LAN PC name) goes straight to that PC, no server, so no need to be online.
   const lanAddr = parseLanTarget(typed);
   const targetId = lanAddr ? "lan:" + lanAddr : typed;
   if (!lanAddr) {
-    if (!myId) return showToast("Belum terhubung ke server — untuk PC di jaringan yang sama, ketik alamat IP-nya");
+    if (!myId) return showToast("Belum terhubung ke server, untuk PC di jaringan yang sama, ketik alamat IP-nya");
     if (!/^\d{3} \d{3} \d{3}$/.test(targetId)) return showToast("Masukkan ID 9 digit atau alamat IP");
     if (targetId === myId || (svcId && targetId === svcId)) return showToast("Tidak bisa konek ke diri sendiri");
   }
   if (sessions.has(targetId)) {
-    // Double-click on a tile, Enter + click, a second Enter listener: just bring that tab up — a tab still
+    // Double-click on a tile, Enter + click, a second Enter listener: just bring that tab up, a tab still
     // connecting keeps its Connecting screen (Cancel + password box), it is not "already open".
     const s = sessions.get(targetId);
     if (fromUi || !background) switchTab(s);
@@ -1573,10 +1810,10 @@ function initiateConnection(target, password, { background = false } = {}) {
   const sess = new Session(targetId, "viewer");
   sessions.set(targetId, sess);
   updateSessionLabel(sess);           // a renamed ID shows its name on the tab right away
-  // Hold the typed password locally for the challenge/response — it is NEVER sent to the server. savedPassword
+  // Hold the typed password locally for the challenge/response, it is NEVER sent to the server. savedPassword
   // stays with the tab so an auto-reconnect can answer the host's challenge again.
   sess.pendingPassword = sess.savedPassword = (fromUi ? remotePasswordInput.value : password) || "";
-  // The typed password belongs to THIS PC only — clear it so the next tile or ID doesn't silently reuse it
+  // The typed password belongs to THIS PC only, clear it so the next tile or ID doesn't silently reuse it
   // (a wrong answer there counts toward that PC's lock-out).
   if (fromUi) remotePasswordInput.value = "";
   if (!background) active = sess;
@@ -1585,8 +1822,9 @@ function initiateConnection(target, password, { background = false } = {}) {
     showScreen("connecting");
     renderPwPrompt();
     setConnectStep(1);
-    $("#connecting-title").textContent = "Menghubungkan";
-    $("#connecting-text").textContent = `Meminta akses ke ${fmtId(targetId)}...`;
+    // Concept: the PC's ID large, one small line above it that says what is happening.
+    $("#connecting-title").textContent = /^lan:/.test(targetId) ? targetId.slice(4) : fmtId(targetId);
+    $("#connecting-text").textContent = `Menyambung ke ${peerName(targetId) || "PC"}`;
   }
   sendSignal({ type: "connect-request", targetId, fromName: store.get("deviceAlias") || "TryDesk User" });
   sessLog(sess, "request sent");
@@ -1615,8 +1853,8 @@ const PW_WAIT = {
 function showPwPrompt(s, nonce, last) {
   s.pwPrompt = { nonce, last: PW_PROMPT_TEXT[last] ? last : "empty" };
   renderPwPrompt();
-  // A tab in the background (or an auto-reconnect) can't show its box — point the user at it.
-  if (s !== active || $("#screen-connecting").classList.contains("hidden")) showToast(`${fmtId(s.peerId)} meminta password akses — buka tab tersebut`);
+  // A tab in the background (or an auto-reconnect) can't show its box, point the user at it.
+  if (s !== active || $("#screen-connecting").classList.contains("hidden")) showToast(`${fmtId(s.peerId)} meminta password akses, buka tab tersebut`);
 }
 function renderPwPrompt() {
   const s = active && active.role === "viewer" && !active.pc ? active : null;
@@ -1672,8 +1910,8 @@ async function startViewer(sess) {
   sess.dataChannel.onmessage = (m) => { let ev; try { ev = JSON.parse(m.data); } catch { return; } onCtrlMessage(sess, ev); };
   sess.dataChannel.onopen = () => {
     sendQuality(sess); startClipboardSync(sess); reapplyBlackScreen(sess);
-    // Once: text copied BEFORE connecting is deliberately not sent (privacy) — say so, or "copy, connect, paste" just seems broken.
-    if (clipboardSync && store.get("tipClipBaseline") !== "1" && !document.documentElement.classList.contains("td-mobile")) { store.set("tipClipBaseline", "1"); setTimeout(() => showToast("Tip: teks yang disalin sebelum tersambung tidak ikut dikirim — salin ulang setelah tersambung"), 2500); }
+    // Once: text copied BEFORE connecting is deliberately not sent (privacy), say so, or "copy, connect, paste" just seems broken.
+    if (clipboardSync && store.get("tipClipBaseline") !== "1" && !document.documentElement.classList.contains("td-mobile")) { store.set("tipClipBaseline", "1"); setTimeout(() => showToast("Tip: teks yang disalin sebelum tersambung tidak ikut dikirim, salin ulang setelah tersambung"), 2500); }
   };
   sess.fileChannel = pc.createDataChannel("file", { ordered: true });
   sess.fileChannel.binaryType = "arraybuffer";
@@ -1715,7 +1953,7 @@ async function startViewer(sess) {
 // estimate (the cause of the first 10–30s showing a tiny, low-res remote screen). We inject
 // Google's x-google-*-bitrate hints into the video codecs so it jumps to full resolution at once.
 function boostStartBitrate(sdp) {
-  const startKbps = 12000;                                  // encoder's initial target — start sharp (HD), not a ramp-up
+  const startKbps = 12000;                                  // encoder's initial target, start sharp (HD), not a ramp-up
   const minKbps = 1200;                                     // floor kept low so weak links still adapt down, not choke
   // Only a ceiling for the bandwidth estimate: this offer is made by the viewer, the quality can change without a new
   // offer, and the host's encoder maxBitrate already caps each quality. (It read the viewer's unused hostQuality: 80.)
@@ -1761,7 +1999,7 @@ function applyCodecPreference(sess) {
     const caps = RTCRtpReceiver.getCapabilities("video");
     if (!caps) return;
     // "Otomatis" must really go back to the browser's own order. An empty list is meant to reset it, but this
-    // Chromium keeps the earlier choice (VP9…) — so hand it the default order explicitly.
+    // Chromium keeps the earlier choice (VP9…), so hand it the default order explicitly.
     // "Otomatis" puts H.264 first: it is the codec GPUs encode and decode in hardware (measured: NVIDIA MFT on
     // the host, ~0.6 ms decode), where VP8/VP9/AV1 run in software on the CPU. Without a hardware encoder the
     // host falls back to software H.264 by itself. The rest keeps the browser's own order.
@@ -1789,7 +2027,7 @@ const pwBlocked = (id) => { const f = pwFail.get(pwKey(id)); return !!f && f.unt
 // A SECOND, requester-independent budget. The per-id cool-down above is defeated by an attacker who
 // rotates its requester ID (the signaling server hands any token-less socket a fresh ID), so wrong
 // answers also count toward one global tally. Once it trips, the password challenge is withheld and
-// the host falls back to manual Accept — a person at the PC can still let someone in, but automated
+// the host falls back to manual Accept, a person at the PC can still let someone in, but automated
 // guessing gets no HMAC oracle at all. Verified: rotating-ID guessing no longer bypasses the limit.
 const PW_GLOBAL_MAX = 12;                      // total wrong answers (any requester) before withholding the challenge
 const PW_GLOBAL_WINDOW = 10 * 60 * 1000;
@@ -1823,9 +2061,9 @@ async function handleIncoming(msg) {
   if (updateRequired) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: "PC tujuan memakai versi TryDesk lama yang wajib diperbarui" }); return; }
   // The macOS and Linux builds can control other PCs but can't be controlled (screen capture + input are Windows code).
   if (viewerOnlyDesktop()) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: isMacViewer() ? "Perangkat ini memakai TryDesk untuk macOS, yang hanya bisa mengontrol PC Windows" : "PC ini memakai TryDesk untuk Linux, yang saat ini hanya bisa mengontrol PC lain" }); return; }
-  // An accept dialog or password challenge is already in flight for another requester — reject this
+  // An accept dialog or password challenge is already in flight for another requester, reject this
   // one instead of stacking (which would corrupt state and double-start a session).
-  // Exception: a LAN password round in progress never makes the PC "busy" for someone asking by ID — a stranger on
+  // Exception: a LAN password round in progress never makes the PC "busy" for someone asking by ID, a stranger on
   // the network could otherwise keep it busy for everyone. The LAN requester gives way and can try again.
   if (pendingChallenge && lanIn(pendingChallenge.fromId) && !lanIn(msg.fromId) && !pendingChallenge.settle && !acceptPending) {
     const pc = pendingChallenge; clearTimeout(pc._t); pendingChallenge = null;
@@ -1834,7 +2072,7 @@ async function handleIncoming(msg) {
   if (acceptPending || pendingChallenge) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: "Remote desktop sedang sibuk" }); return; }
   if (host) {
     // Only truly busy if the existing peer connection is still alive. Otherwise it's a stale
-    // session left over from an abrupt drop — clear it and accept the new request (no restart needed).
+    // session left over from an abrupt drop, clear it and accept the new request (no restart needed).
     // No pc yet = the previous accept is still setting up capture: that is busy, not stale.
     const alive = !host.pc || ["new", "connecting", "connected"].includes(host.pc.connectionState);
     if (alive) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: "Remote desktop sedang sibuk" }); return; }
@@ -1847,14 +2085,14 @@ async function handleIncoming(msg) {
   // Over LAN nobody vouches for the requester (no server, no ID): only the access password lets it in.
   if (lanIn(msg.fromId)) {
     const why = !lanHostOn ? "Koneksi LAN tidak diaktifkan di PC tujuan"
-      : !(savedHash && savedHash.includes(":")) ? "PC tujuan belum memasang password akses — koneksi lewat IP membutuhkan password"
+      : !(savedHash && savedHash.includes(":")) ? "PC tujuan belum memasang password akses, koneksi lewat IP membutuhkan password"
       : !lanPwStrong() ? `PC tujuan perlu password akses minimal ${LAN_PW_MIN} karakter untuk koneksi lewat IP`
       : pwGlobalBlocked(msg.fromId) ? "Terlalu banyak percobaan, coba lagi nanti" : "";
     if (why) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: why }); return; }
   }
   if (savedHash && savedHash.includes(":") && !pwGlobalBlocked(msg.fromId)) {
     // Password set → server-blind challenge. Relay only the salt + a one-shot nonce; we accept only
-    // once the viewer returns a valid HMAC (proving it knows the password) — the password never travels.
+    // once the viewer returns a valid HMAC (proving it knows the password), the password never travels.
     const nonce = _hex(crypto.getRandomValues(new Uint8Array(32)).buffer);
     const salt = savedHash.split(":")[0];
     pendingChallenge = { fromId: msg.fromId, fromName: msg.fromName, nonce, salt, round: 0, settle: null, started: Date.now() };
@@ -1870,19 +2108,19 @@ async function handleIncoming(msg) {
   // No password (or a legacy unsalted hash that can't do HMAC) → ask the user to accept manually.
   const accepted = await askAccept(msg.fromId, msg.fromName);
   if (!accepted) { sendSignal({ type: "connection-rejected", targetId: msg.fromId, reason: declineReason() }); return; }
-  await finishAccept(msg.fromId);
+  await finishAccept(msg.fromId, false, msg.fromName);
 }
 
 // Verify the viewer's HMAC answer to our challenge (AnyDesk-style flow):
 //  · right password → straight in (or it answers the Accept dialog if that is already up);
 //  · no password / wrong one → the owner gets the Accept dialog AND the requester is asked again, so they can
-//    still type the password on their side — whichever comes first wins. Wrong answers count toward the
+//    still type the password on their side, whichever comes first wins. Wrong answers count toward the
 //    per-requester cool-down; once that trips, the request is refused.
 const PW_HINT = {
-  empty: "Peminta tidak memasukkan password akses. Ia masih bisa mengetiknya — bila benar, koneksi langsung diterima.",
+  empty: "Peminta tidak memasukkan password akses. Ia masih bisa mengetiknya, bila benar, koneksi langsung diterima.",
   emptyManual: "Peminta tidak memasukkan password akses.",
   wrong: "Peminta memasukkan password yang salah dan bisa mencoba lagi.",
-  okManual: "Password benar, tetapi \"Terima koneksi otomatis\" dimatikan di Pengaturan — jadi tetap perlu konfirmasi.",
+  okManual: "Password benar, tetapi \"Terima koneksi otomatis\" dimatikan di Pengaturan, jadi tetap perlu konfirmasi.",
 };
 async function handleChallengeResponse(msg) {
   const pc = pendingChallenge;
@@ -1905,7 +2143,7 @@ async function handleChallengeResponse(msg) {
     pc.pwOk = true;   // the viewer holds the password key: this session signs its offer/answer (see finishAccept)
     if (!autoAcceptWithPassword) { if (!pc.settle) askOwner(pc, PW_HINT.okManual); return; }
     if (pc.settle) pc.settle(true);
-    else { pendingChallenge = null; await finishAccept(pc.fromId, true); }
+    else { pendingChallenge = null; await finishAccept(pc.fromId, true, pc.fromName); }
     return;
   }
   if (!empty) {
@@ -1919,7 +2157,7 @@ async function handleChallengeResponse(msg) {
       return;
     }
   }
-  // LAN: no Accept dialog for a stranger on the network — the requester simply gets asked for the password again.
+  // LAN: no Accept dialog for a stranger on the network, the requester simply gets asked for the password again.
   // An empty answer after the first round counts as a wrong one too (an idle requester must not hold the PC), and
   // the whole exchange ends after 90 s or 8 rounds, matching the socket's own 90 s limit in main.js.
   if (lanIn(pc.fromId)) {
@@ -1953,13 +2191,14 @@ async function askOwner(pc, hint) {
   if (!reason) reason = declineReason();
   if (pendingChallenge === pc) pendingChallenge = null;
   // Signed only when the password was proven; the owner clicking Accept for an empty or wrong one is a plain session.
-  if (ok) await finishAccept(pc.fromId, !!pc.pwOk);
+  if (ok) await finishAccept(pc.fromId, !!pc.pwOk, pc.fromName);
   else sendSignal({ type: "connection-rejected", targetId: pc.fromId, reason });
 }
 
 // Build the host session + capture + peer once a requester is authorized (manual accept or challenge).
-async function finishAccept(fromId, viaPassword) {
+async function finishAccept(fromId, viaPassword, fromName = "") {
   const sess = new Session(fromId, "host");
+  sess.fromName = fromName;
   host = sess;
   // A session that proved the password checks the viewer's offers against the password key (LAN and ID path alike,
   // see sendSignal). A LAN socket also outlives main.js's 90 s limit for requests that never became a session.
@@ -1998,7 +2237,7 @@ async function finishAccept(fromId, viaPassword) {
     }
     if (!cap) throw lastErr || new Error("capture failed");
     const { stream, m } = cap;
-    // Hosting was stopped while capture was starting — release the screen instead of streaming it to nobody.
+    // Hosting was stopped while capture was starting, release the screen instead of streaming it to nobody.
     if (host !== sess) { stream.getTracks().forEach((t) => t.stop()); return; }
     sess.localStream = stream;
     sess.videoTrack = stream.getVideoTracks()[0];
@@ -2047,13 +2286,16 @@ async function finishAccept(fromId, viaPassword) {
     }
   };
 
-  $("#hosting-text").textContent = "Desktop Anda sedang dikontrol";
+  $("#hosting-text").textContent = "Anda tetap bisa memakai PC ini. Putuskan kapan saja.";
   $("#hosting-peer-id").textContent = fmtId(sess.peerId);
+  // Concept: "Dikontrol oleh Laptop-Ibu" over the controller's ID (the name the requester sent, if any).
+  { const nm = stripBidi(String(sess.fromName || "")).trim();
+    $("#hosting-peer-label").textContent = nm && nm !== "TryDesk User" ? `Dikontrol oleh ${nm}` : "Dikontrol oleh"; }
   showScreen("hosting");
   startHostingTimer();
   sendSignal({ type: "connection-accepted", targetId: sess.peerId });
   // If the viewer never sets up the call (it vanished between asking and our accept), don't stay "being
-  // controlled" — capturing the screen and turning everyone else away as busy. Only for a call that never
+  // controlled", capturing the screen and turning everyone else away as busy. Only for a call that never
   // connected: a live one that is briefly "disconnected" at 30 s gets the normal 5 s grace instead.
   setTimeout(() => { if (host === sess && !sess.everConnected && (!sess.pc || sess.pc.connectionState !== "connected")) closeSession(sess, false); }, 30000);
   window.electronAPI.setHostingState(true);
@@ -2086,7 +2328,7 @@ function armSessionLimit(sess) {
   if (limitMin <= 0) return;
   const left = Math.max(1000, (sess.hostStart || Date.now()) + limitMin * 60 * 1000 - Date.now());
   sess.limitTimer = setTimeout(() => {
-    if (host === sess) { showToast("Batas waktu sesi tercapai — koneksi diputus"); closeSession(sess, true, "Batas waktu sesi di PC remote tercapai — koneksi diputus"); }
+    if (host === sess) { showToast("Batas waktu sesi tercapai, koneksi diputus"); closeSession(sess, true, "Batas waktu sesi di PC remote tercapai, koneksi diputus"); }
   }, left);
 }
 
@@ -2094,12 +2336,12 @@ async function onOffer(sess, offer) {
   await sess.pc.setRemoteDescription(offer);
   flushCandidates(sess);
   const answer = await sess.pc.createAnswer();
-  answer.sdp = boostStartBitrate(answer.sdp);   // host is the video sender — jump to full res immediately
+  answer.sdp = boostStartBitrate(answer.sdp);   // host is the video sender, jump to full res immediately
   await sess.pc.setLocalDescription(answer);
   sendSignal({ type: "answer", targetId: sess.peerId, answer: sess.pc.localDescription });
 }
 
-// Host-side access permissions — what an incoming remote may do to THIS machine. These are the
+// Host-side access permissions, what an incoming remote may do to THIS machine. These are the
 // authoritative gates (the viewer's own toggles can be bypassed by a modified client), loaded from
 // Settings → Keamanan → Izin akses. See applyAccessSettings().
 let allowInput = true, allowFileTransfer = true, allowClipboardPref = true, forceViewOnly = false;
@@ -2130,7 +2372,7 @@ function onCtrlMessage(sess, ev) {
   }
   else if (typeof ev.__ctrl === "string" && ev.__ctrl.startsWith("fast-")) onFastCtrl(sess, ev);
   else if (ev.action === "mousemove" && sess.role === "host") onHostMove(sess, ev);
-  // Anything else is a remote input event — only execute it when WE are the host AND control is
+  // Anything else is a remote input event, only execute it when WE are the host AND control is
   // permitted. A modified viewer cannot force input past this host-side gate.
   else if (sess.role === "host" && allowInput && !forceViewOnly) window.electronAPI.executeInput(ev);
 }
@@ -2274,8 +2516,8 @@ function hostFastStop(sess, why) {
 }
 const fastCtrl = (sess, msg) => { try { if (sess.dataChannel && sess.dataChannel.readyState === "open") sess.dataChannel.send(JSON.stringify(msg)); } catch {} };
 // ─── Native capture fallback ──────────────────────────────
-// When Chromium's own capture can't start at all — TryDesk run as administrator inside an RDP session failed every
-// try with "Could not start video source" while its capture process crashed (rented PC, 2026-11-02) — the picture
+// When Chromium's own capture can't start at all, TryDesk run as administrator inside an RDP session failed every
+// try with "Could not start video source" while its capture process crashed (rented PC, 2026-11-02), the picture
 // comes from TryDesk's DXGI helper instead: its H.264 is decoded here and handed to WebRTC as an ordinary video
 // track, so every viewer (phone, Mac, old versions) still gets it. The fast path stays off while this runs.
 let nativeCap = null;
@@ -2553,7 +2795,7 @@ function viewerFastStop(sess, why, tellHost) {
 
 // ─── Remote filesystem browsing (serves the peer's file manager) ───
 // Only the HOST (the machine being controlled) serves its filesystem, and only when file transfer
-// is permitted — a machine must never expose its own files to a host it connected OUT to.
+// is permitted, a machine must never expose its own files to a host it connected OUT to.
 async function handleFsRequest(sess, ev) {
   if (sess.role !== "host") return;
   if (!sess.dataChannel || sess.dataChannel.readyState !== "open") return;
@@ -2617,7 +2859,7 @@ function handleFsResponse(sess, ev) {
 
 // ─── Host: multi-monitor capture ──────────────────────────
 // Capture breadcrumbs in the app log (%APPDATA%\TryDesk\trydesk-crash.log): which monitor/source/path was
-// grabbed and why each re-capture happened — how a client PC's monitor-switch or flicker report is diagnosed.
+// grabbed and why each re-capture happened, how a client PC's monitor-switch or flicker report is diagnosed.
 function capLog(msg) { try { window.electronAPI.logInfo("capture " + msg); } catch {} }
 // Session steps in the local log (no passwords, no screen content), so a failed connection can be traced later.
 function sessLog(sess, msg) { try { window.electronAPI.logInfo(`session ${sess.role} ${sess.peerId}: ${msg}`); } catch {} }
@@ -2649,9 +2891,9 @@ async function hostCapture(sess, index, withAudio) {
   let stream, via = "gdm";
   try {
     // Tell main which screen to hand getDisplayMedia (awaited, so it's set before the request), then grab it.
-    // getDisplayMedia honors frameRate up to the display refresh — this is what unlocks >120 fps.
+    // getDisplayMedia honors frameRate up to the display refresh, this is what unlocks >120 fps.
     if (!(await window.electronAPI.setDisplayMediaSource(m.sourceId, m.displayId))) throw new Error("monitor not exposed as a capture source");
-    // NOTE: getDisplayMedia does NOT support frameRate.min ("min constraints are not supported") — only
+    // NOTE: getDisplayMedia does NOT support frameRate.min ("min constraints are not supported"), only
     // ideal/max. (The idle-freshness min stays on the legacy fallback below, which does support it.)
     const videoC = { width: { ideal: W }, height: { ideal: H }, frameRate: { ideal: wantFps, max: wantFps } };
     // Audio is best-effort: if loopback audio capture is unsupported, keep the HIGH-FPS video instead of
@@ -2721,7 +2963,7 @@ async function swapCaptureTrack(sess, index) {
   if (!sender) return;
   const { stream, m } = await hostCapture(sess, index, false);
   const newVideo = stream.getVideoTracks()[0];
-  // The session may have closed while this swap waited its turn — release the screen instead of leaking it.
+  // The session may have closed while this swap waited its turn, release the screen instead of leaking it.
   if (!sess.pc || sess.pc.connectionState === "closed") { stream.getTracks().forEach((t) => t.stop()); return; }
   await sender.replaceTrack(newVideo);
   stopNativeCapture();   // Chromium's capture works again: the helper fallback is no longer needed
@@ -2732,7 +2974,7 @@ async function swapCaptureTrack(sess, index) {
   sess.currentMonitor = index;
   hostCaptureHeight = newVideo.getSettings().height || Math.round(m.height * m.scaleFactor);
   // Remember exactly what we're capturing so a spurious display-metrics event (same size) doesn't trigger
-  // a needless re-capture — each re-capture is a real video reset the viewer sees as a flicker.
+  // a needless re-capture, each re-capture is a real video reset the viewer sees as a flicker.
   sess._capW = m.width; sess._capH = m.height; sess._capSF = m.scaleFactor;
   window.electronAPI.setCaptureDisplay(m);
 }
@@ -2764,7 +3006,7 @@ async function applyQualityToSender(sess, q) {
   };
   const sender = sess.pc && sess.pc.getSenders().find((s) => s.track && s.track.kind === "video");
   if (!sender) return;
-  // If a higher frame rate than the current capture cap is requested, re-capture — the
+  // If a higher frame rate than the current capture cap is requested, re-capture, the
   // mandatory maxFrameRate set at getUserMedia time is a hard ceiling that applyConstraints can't raise.
   if (hostQuality.fps > hostCaptureFps) {
     try { await replaceCaptureTrack(sess, null, false, `fps ${hostQuality.fps}`); } catch (e) { console.warn("recapture for fps failed", e); }
@@ -2774,7 +3016,7 @@ async function applyQualityToSender(sess, q) {
     if (!params.encodings || !params.encodings.length) params.encodings = [{}];
     // Good network → keep the remote screen SHARP at native resolution (drop FPS, not resolution). Unstable
     // network (high loss/RTT, the viewer signals it via the "net-mode" control) → switch to "balanced" so
-    // WebRTC can shed RESOLUTION and keep the picture MOVING instead of freezing at full res @ ~6fps — far
+    // WebRTC can shed RESOLUTION and keep the picture MOVING instead of freezing at full res @ ~6fps, far
     // friendlier on bad/relay links. (maintain-framerate downscaled to 640x360 on connect, so we avoid it.)
     params.degradationPreference = sess._netDegraded || sess._bwLimited ? "balanced" : "maintain-resolution";
     const enc = params.encodings[0];
@@ -2817,10 +3059,10 @@ if (window.electronAPI && window.electronAPI.onDisplayChanged) {
       const idx = Math.min(sess.currentMonitor, Math.max(0, sess.monitors.length - 1));
       const mon = sess.monitors[idx];
       // Only re-capture when the monitor we're streaming actually changed resolution/scale. Fullscreen games
-      // and sandboxes fire display-metrics repeatedly with NO real size change — re-capturing on those was
+      // and sandboxes fire display-metrics repeatedly with NO real size change, re-capturing on those was
       // the main cause of the "berkedip-kedip" flicker during gameplay. Skip the no-op events.
       // force: the display itself was replaced (RDP reconnect, move to the console), so the old capture shows
-      // black even at the same size — same path as picking the monitor again, which brought the picture back.
+      // black even at the same size, same path as picking the monitor again, which brought the picture back.
       if (force) {
         await switchMonitor(sess, idx);
         // The fast path may have given up while the display was gone: let the viewer start it again.
@@ -2864,7 +3106,7 @@ function createPeer(sess) {
   clearTimeout(sess.p2pTimer);
   if (!sess.everConnected) sess.p2pTimer = setTimeout(() => {
     if (sess.pc !== pc || sess.everConnected) return;
-    sessLog(sess, `no P2P link after 30 s (state ${pc.connectionState}, ice ${pc.iceConnectionState}) — ending`);
+    sessLog(sess, `no P2P link after 30 s (state ${pc.connectionState}, ice ${pc.iceConnectionState}), ending`);
     const fg = sess === active || sess.role === "host";
     // An auto-reconnect attempt that doesn't come up just counts as a failed try: no "bye" (that would stop
     // the retries on both ends), the next attempt follows.
@@ -2874,7 +3116,7 @@ function createPeer(sess) {
       : "Koneksi dengan pengontrol tidak terbentuk dalam 30 detik, sesi diakhiri.");
   }, 30000);
   pc.onconnectionstatechange = () => {
-    if (sess.pc !== pc) return;   // a newer pc replaced this one — ignore stale events
+    if (sess.pc !== pc) return;   // a newer pc replaced this one, ignore stale events
     sessLog(sess, "P2P " + pc.connectionState);
     if (pc.connectionState === "connected") {
       clearTimeout(sess.p2pTimer);
@@ -2888,10 +3130,10 @@ function createPeer(sess) {
       const wasActive = sess === active || sess.role === "host";
       closeSession(sess, false);
       if (target && autoReconnect && (sess.everConnected || sess.isReconnect)) tryReconnect(target, sess.savedPassword, wasActive);
-      else if (wasActive) showToast(prefGet("protocol") === "p2p" ? "Koneksi P2P gagal — coba protokol Otomatis (Pengaturan → Koneksi) agar bisa lewat relay"
-        : serverIceServers.length ? "Koneksi gagal — relay TURN tidak terjangkau" : "Koneksi P2P gagal — server belum menyediakan TURN relay");
+      else if (wasActive) showToast(prefGet("protocol") === "p2p" ? "Koneksi P2P gagal, coba protokol Otomatis (Pengaturan → Koneksi) agar bisa lewat relay"
+        : serverIceServers.length ? "Koneksi gagal, relay TURN tidak terjangkau" : "Koneksi P2P gagal, server belum menyediakan TURN relay");
     } else if (pc.connectionState === "disconnected") {
-      // Host: the viewer can't send key/button "up" events while the link is down — don't leave them held
+      // Host: the viewer can't send key/button "up" events while the link is down, don't leave them held
       // here for the 5s grace period (or forever, if it never comes back).
       if (sess.role === "host") { try { window.electronAPI.releaseRemoteInput(); } catch {} }
       clearTimeout(sess.disconnectTimer);
@@ -2909,7 +3151,7 @@ function createPeer(sess) {
   };
 }
 
-// Session auto-reconnect (viewer side): after an UNEXPECTED drop, keep trying the same PC — with THAT tab's own
+// Session auto-reconnect (viewer side): after an UNEXPECTED drop, keep trying the same PC, with THAT tab's own
 // password, without pulling the user away from another tab. Per PC, with growing pauses;
 // each try first waits for our own server link (after sleep / a Wi-Fi switch it is reconnecting too), and a try
 // that fails (offline, busy, no answer) schedules the next. A deliberate end (bye) never reconnects.
@@ -3029,7 +3271,7 @@ function closeSession(sess, notify = true, reason = "") {
   cleanupTransfers(sess);
   for (const [, p] of sess.fsPending) { clearTimeout(p.timer); try { p.reject(new Error("closed")); } catch {} }
   sess.fsPending.clear();
-  // Closing the connection right after the "bye" would drop it in flight — give it a moment to arrive.
+  // Closing the connection right after the "bye" would drop it in flight, give it a moment to arrive.
   {
     const dc = sess.dataChannel, fc = sess.fileChannel, pc = sess.pc;
     sess.dataChannel = null; sess.fileChannel = null; sess.pc = null;
@@ -3046,10 +3288,10 @@ function closeSession(sess, notify = true, reason = "") {
   updateDiscordPresence();   // session ended → refresh (likely back to "idle")
 
   if (sess.role === "host") {
-    // Only the CURRENT host session owns the shared host state (privacy overlays, held input, UI) — a late
+    // Only the CURRENT host session owns the shared host state (privacy overlays, held input, UI), a late
     // teardown of an older, already-replaced one must not undo the live session's.
     if (host !== sess) return;
-    // Host teardown — release privacy features defensively and reset host UI.
+    // Host teardown, release privacy features defensively and reset host UI.
     try { window.electronAPI.releaseRemoteInput(); } catch {}
     clearTimeout(sess.limitTimer);
     try { window.electronAPI.setPowerSave(false); window.electronAPI.setHostingState(false); } catch {}
@@ -3081,7 +3323,7 @@ function closeSession(sess, notify = true, reason = "") {
     renderTabs();
     if (wasActive) switchTab(remaining[remaining.length - 1]);
   } else {
-    // Last viewer tab closed — reset the shared remote UI and leave the remote screen.
+    // Last viewer tab closed, reset the shared remote UI and leave the remote screen.
     resetRemoteUI();
     renderTabs();
     showScreen(host ? "hosting" : "home");
@@ -3094,6 +3336,7 @@ function resetRemoteUI() {
   scaleMode = "fit"; $("#scale-select").value = "fit";
   $("#remote-loading")?.classList.add("hidden");
   qualityPanel.classList.add("hidden");
+  if (ccDocked) ccSetDocked(false); else $("#screen-remote").classList.remove("cc-docked");
   $("#monitor-picker").style.display = "none";
   closeAllMenus();
   $("#btn-audio").classList.remove("active"); $("#btn-audio").disabled = true;
@@ -3120,7 +3363,7 @@ function renderTabs() {
     const tab = document.createElement("button");
     tab.className = "rtab" + (s === active ? " active" : "") + (s.chatUnread ? " unread" : "");
     tab.dataset.sid = s.sid;
-    tab.title = `${s.label} · ${s.peerId}`;
+    tab.title = `${s.label} · ${fmtId(s.peerId)}. ${lang === "en" ? "Double-click to rename" : "Klik dua kali untuk mengganti nama"}`;
     const dot = s.pc ? (s.hasFrame ? "live" : "wait") : "wait";
     tab.innerHTML =
       `<span class="rtab-dot ${dot}"></span>` +
@@ -3131,6 +3374,8 @@ function renderTabs() {
       if (e.target.closest(".rtab-close")) { e.stopPropagation(); closeSession(s, true); return; }
       if (s !== active) switchTab(s);
     });
+    tab.addEventListener("dblclick", (e) => { if (!e.target.closest(".rtab-close")) renameTab(s, tab); });
+    tab.addEventListener("keydown", (e) => { if (e.key === "F2") { e.preventDefault(); renameTab(s, tab); } });
     bar.appendChild(tab);
   }
   const add = document.createElement("button");
@@ -3160,8 +3405,8 @@ function switchTab(sess) {
   // A tab that is still connecting shows the Connecting screen (Cancel, and the password box if its PC asked).
   if (!sess.pc) {
     showScreen("connecting");
-    $("#connecting-title").textContent = "Menghubungkan";
-    $("#connecting-text").textContent = sess.pwPrompt ? "Menunggu password atau persetujuan pemilik PC" : `Meminta akses ke ${fmtId(sess.peerId)}...`;
+    $("#connecting-title").textContent = /^lan:/.test(sess.peerId) ? sess.peerId.slice(4) : fmtId(sess.peerId);
+    $("#connecting-text").textContent = sess.pwPrompt ? "Menunggu password atau persetujuan pemilik PC" : `Menyambung ke ${peerName(sess.peerId) || "PC"}`;
     setConnectStep(2);
     renderTabs(); showActiveVideo(); renderPwPrompt();
     return;
@@ -3170,8 +3415,7 @@ function switchTab(sess) {
   renderTabs();
   showActiveVideo();
   setPeerLabel(sess.pc ? "Terhubung ke" : "Menghubungkan", sess.peerId, sess.pc ? "" : "…");
-  $("#rt-latency-badge").textContent = sess.latencyText || "- ms";
-  $("#rt-latency-badge").className = `sb-badge sb-lat ${sess.latencyClass || ""}`;
+  setLatBadge(sess);
   $("#session-timer").textContent = sess.timerText;
   $("#scale-select").value = sess.scaleMode;
   applyScale();
@@ -3226,7 +3470,10 @@ function askAccept(fromId, fromName, hint = "") {
     setAcceptHint(hint);
     const aliasEl = $("#accept-alias");
     const alias = stripBidi(fromName).trim();   // the requester picks this text: no right-to-left tricks
-    aliasEl.textContent = alias && alias !== "TryDesk User" ? alias : "";
+    // Concept: one sentence that says who wants what ("Laptop-Ibu ingin mengontrol desktop ini.").
+    // (This element is skipped by the EN text map because the name is the requester's text: build both languages here.)
+    { const named = alias && alias !== "TryDesk User";
+      aliasEl.textContent = lang === "en" ? `${named ? alias : "Someone"} wants to control this desktop.` : `${named ? alias : "Seseorang"} ingin mengontrol desktop ini.`; }
     // Settings → Umum → Notifikasi: tell the user even when TryDesk is behind other windows.
     if (!document.hasFocus() && prefGet("notifyIncoming")) {
       try { new Notification(tr("Permintaan koneksi masuk"), { body: (alias && alias !== "TryDesk User" ? alias + " · " : "") + fmtId(fromId), silent: !prefGet("notifySound") }); } catch {}
@@ -3240,6 +3487,9 @@ function askAccept(fromId, fromName, hint = "") {
     const timerBar = $("#accept-timer-bar");
     let remaining = ACCEPT_TIMEOUT;
     timerBar.style.width = "100%";
+    const countEl = $("#accept-countdown");
+    const showCount = () => { if (countEl) countEl.textContent = `Ditolak otomatis dalam ${Math.max(0, remaining)} detik`; };
+    showCount();
     acceptPending = true;
     acceptFromId = fromId;
 
@@ -3247,6 +3497,7 @@ function askAccept(fromId, fromName, hint = "") {
     acceptTimerHandle = setInterval(() => {
       remaining--;
       timerBar.style.width = `${(remaining / ACCEPT_TIMEOUT) * 100}%`;
+      showCount();
       if (remaining <= 0) done(false, true);
     }, 1000);
 
@@ -3286,13 +3537,13 @@ function maskResChange(sess) {
   sess.resMaskTimer = setTimeout(() => v.classList.remove("res-switching"), 380);
 }
 
-// ─── View scale & pan (viewer) — operates on the active tab's video ───
+// ─── View scale & pan (viewer), operates on the active tab's video ───
 function applyScale() {
   const video = activeVideo();
   const c = $("#remote-canvas-container");
   if (!video) return;
   if (scaleMode === "fit") {
-    // Skip redundant repaints (resize/loadedmetadata call this too) — re-applying the same state
+    // Skip redundant repaints (resize/loadedmetadata call this too), re-applying the same state
     // re-rasterizes the video layer and causes a visible flicker on every scale switch.
     if (c.classList.contains("fit") && !video.style.width) return;
     c.classList.add("fit"); c.classList.remove("scaled");
@@ -3312,7 +3563,7 @@ function applyScale() {
 }
 
 // ─── Viewer: monitors & audio ─────────────────────────────
-// A monitor list arrived for a session — store it; render the picker only for the active tab.
+// A monitor list arrived for a session, store it; render the picker only for the active tab.
 function showMonitors(sess, ev) {
   // Sanitize peer-supplied monitor metadata: coerce index to a real integer and label to a string
   // so it can never carry markup into the picker / Control Center labels.
@@ -3327,7 +3578,7 @@ function showMonitors(sess, ev) {
   if (ev.perms) {
     const viewOnly = ev.perms.control === false;
     if (viewOnly !== !!sess.hostViewOnly && (viewOnly || sess.hostViewOnly !== undefined)) {
-      showToast(viewOnly ? "PC remote hanya mengizinkan melihat layar — klik & ketikan tidak dikirim" : "PC remote mengizinkan kontrol lagi");
+      showToast(viewOnly ? "PC remote hanya mengizinkan melihat layar, klik & ketikan tidak dikirim" : "PC remote mengizinkan kontrol lagi");
     }
     sess.hostViewOnly = viewOnly;
     sess.hostFiles = ev.perms.files !== false;
@@ -3369,9 +3620,34 @@ function renderMonitorPicker(sess) {
 
 // Tab label: the name given to this ID (Rename on a Recent tile), else the active monitor's name when known
 // (AnyDesk-style), else the peer ID.
+// The tab names the PC (its saved name, else its ID), as in concept B; which monitor is shown lives in Control
+// Center's Monitor row. Double-click a tab to rename the PC (the same name as on its Recent tile).
 function updateSessionLabel(sess) {
-  const m = sess.monitors[sess.currentMonitor];
-  sess.label = peerName(sess.peerId) || ((m && m.label) ? `Monitor ${sess.currentMonitor + 1} (${m.label})` : fmtId(sess.peerId));
+  sess.label = peerName(sess.peerId) || fmtId(sess.peerId);
+}
+function renameTab(sess, tab) {
+  const label = tab.querySelector(".rtab-label");
+  if (!label || tab.querySelector(".rtab-edit")) return;
+  const input = document.createElement("input");
+  input.className = "rtab-edit"; input.type = "text"; input.maxLength = 40;
+  input.value = peerName(sess.peerId) || "";
+  input.placeholder = fmtId(sess.peerId);
+  input.setAttribute("aria-label", lang === "en" ? "PC name" : "Nama PC");
+  label.replaceWith(input);
+  input.focus(); input.select();
+  let done = false;
+  const finish = (save) => {
+    if (done) return; done = true;
+    if (save) setPeerName(sess.peerId, input.value);
+    renderTabs(); try { renderRecent(); } catch {}
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") finish(true);
+    else if (e.key === "Escape") finish(false);
+  });
+  input.addEventListener("click", (e) => e.stopPropagation());
+  input.addEventListener("blur", () => finish(true));
 }
 
 function toggleAudio() {
@@ -3384,12 +3660,13 @@ function toggleAudio() {
 
 // ─── Chat (per session: the active viewer tab, or the host session) ───
 // The session the user is looking at: on the "being controlled" screen that is the host session, even when a
-// viewer tab is also open — otherwise chat replies / sent files went to the wrong person.
+// viewer tab is also open, otherwise chat replies / sent files went to the wrong person.
 function onHostingScreen() { return !!host && !$("#screen-hosting").classList.contains("hidden"); }
 function curChatSess() { return onHostingScreen() ? host : (active || host); }
 function chatOpen() { return !$("#chat-panel").classList.contains("hidden"); }
 function openChat() {
   const sess = curChatSess(); if (!sess) return;
+  $("#chat-with").textContent = `dengan ${peerName(sess.peerId) || (/^lan:/.test(sess.peerId) ? sess.peerId.slice(4) : fmtId(sess.peerId))}`;
   $("#chat-panel").classList.remove("hidden");
   sess.chatUnread = false;
   renderChat(sess);
@@ -3510,7 +3787,7 @@ const hostControlAllowed = () => allowInput && !forceViewOnly;
 // Files and clipboard are control too: dropping an .exe into the Startup folder or replacing the clipboard is
 // taking over the PC. A view-only / no-control host serves neither, whatever the file-transfer toggle says.
 const hostFilesAllowed = () => allowFileTransfer && hostControlAllowed();
-// A file name sent by the peer becomes a bare base name — never a path that pre-points the save dialog or the
+// A file name sent by the peer becomes a bare base name, never a path that pre-points the save dialog or the
 // file manager at another folder (e.g. "..\..\Startup\update.exe").
 // Right-to-left override and the other bidi controls let "invoice<RLO>fdp.exe" show up as "invoiceexe.pdf".
 const BIDI_CTRL = /[\u200e\u200f\u202a-\u202e\u2066-\u2069]/g;
@@ -3523,7 +3800,7 @@ const peerPathOk = (p) => typeof p === "string" && /^[A-Za-z]:[\\/]/.test(p) && 
   && !p.slice(3).split(/[\\/]/).some((seg) => /^(con|prn|aux|nul|com\d|lpt\d|conin\$|conout\$)(\.|$)/i.test(seg));
 const safeFileName = (n) => {
   let s = stripBidi(n).split(/[\\/]/).pop().replace(/[:*?"<>|\x00-\x1f]/g, "_").replace(/^\.+$/, "").replace(/[ .]+$/, "").slice(0, 200);
-  // Windows reserved device names (CON, NUL, COM1…) would make the write hang or misbehave — prefix them.
+  // Windows reserved device names (CON, NUL, COM1…) would make the write hang or misbehave, prefix them.
   if (/^(con|prn|aux|nul|com\d|lpt\d)(\.|$)/i.test(s)) s = "_" + s;
   return s || "file";
 };
@@ -3597,7 +3874,7 @@ async function handleLockInput(sess, enabled) {
   if (!ok) sendPrivacyResult(sess, "lock-input", true, false, "admin");
 }
 
-// Host: the local panic key (Ctrl+Alt+Shift+Esc) dropped the black screen / input lock — update this UI and tell the viewer.
+// Host: the local panic key (Ctrl+Alt+Shift+Esc) dropped the black screen / input lock, update this UI and tell the viewer.
 if (window.electronAPI && window.electronAPI.onPrivacyReleased) {
   // why "failed": main had to lift the covers because a display that appeared mid-session couldn't be excluded from
   // capture (only the dark screen is affected then, not the input lock).
@@ -3611,7 +3888,7 @@ if (window.electronAPI && window.electronAPI.onPrivacyReleased) {
   });
 }
 
-// Viewer: the host refused or couldn't apply black screen / input lock — undo the optimistic toggle and say why.
+// Viewer: the host refused or couldn't apply black screen / input lock, undo the optimistic toggle and say why.
 function onPrivacyResult(sess, ev) {
   if (ev.feature === "black-screen") clearTimeout(sess.blackAckTimer);
   if (ev.ok) {
@@ -3760,11 +4037,11 @@ function startClipboardSync(sess) {
   sess.clipTimer = setInterval(async () => {
     if (sess.lastClipboard === undefined) return;   // baseline not read yet
     if (!sess.dataChannel || sess.dataChannel.readyState !== "open") return;
-    // The host's permission covers BOTH directions — never hand this PC's clipboard (passwords, tokens…) to a
+    // The host's permission covers BOTH directions, never hand this PC's clipboard (passwords, tokens…) to a
     // viewer when the host switched clipboard sharing off or only lets them watch.
     if (!clipAllowed(sess)) return;
     // Only the tab on screen shares: a background tab (another customer) must not receive what was just
-    // copied from this one. Switching to that tab shares the current clipboard then — a deliberate paste.
+    // copied from this one. Switching to that tab shares the current clipboard then, a deliberate paste.
     // Also require window focus and not view-only, so a copy made elsewhere (a password manager) isn't
     // forwarded to the remote while the user isn't actively pasting into this session.
     if (sess.role === "viewer" && (sess !== active || !document.hasFocus() || sess.viewOnly || sess.hostViewOnly)) return;
@@ -3928,7 +4205,7 @@ async function onFileControl(sess, ev) {
   // ── File manager protocol (dual-pane queue; no save dialogs) ──
   else if (ev.t === "m-put") {
     // Peer wants to upload ev.name into our ev.destDir. Only the host serves the file manager,
-    // and only when file transfer is permitted — never expose a machine we connected OUT to.
+    // and only when file transfer is permitted, never expose a machine we connected OUT to.
     if (sess.role !== "host" || !hostFilesAllowed() || !(Number.isSafeInteger(ev.size) && ev.size >= 0) || !peerPathOk(ev.destDir)) { ch.send(JSON.stringify({ t: "m-putok", id: ev.id, ok: false, err: "ditolak" })); return; }
     if (fileBusy(sess)) { ch.send(JSON.stringify({ t: "m-putok", id: ev.id, ok: false, err: "busy" })); return; }
     try {
@@ -3967,7 +4244,7 @@ async function onFileControl(sess, ev) {
   } else if (ev.t === "m-got") {
     if (sess.mgrGetAck && sess.mgrGetAck.id === ev.id) sess.mgrGetAck.resolve(ev);
   } else if (ev.t === "m-ready") {
-    // We are the sender for a download; receiver is ready — stream now.
+    // We are the sender for a download; receiver is ready, stream now.
     if (sess.activeSend && sess.activeSend.id === ev.id && sess.activeSend.mgr) streamManagerChunks(sess, sess.activeSend);
   } else if (ev.t === "m-pause") {
     if (sess.activeSend && sess.activeSend.id === ev.id) sess.activeSend.paused = !!ev.paused;
@@ -3978,7 +4255,7 @@ async function onFileControl(sess, ev) {
     }
     if (sess.activeSend && sess.activeSend.id === ev.id) {
       sess.activeSend.canceled = true;
-      if (!sess.activeSend.streaming) {   // stream never started (or legacy) — clear it here so we don't stay busy
+      if (!sess.activeSend.streaming) {   // stream never started (or legacy), clear it here so we don't stay busy
         if (sess.activeSend.readId) { try { await window.electronAPI.fileCloseRead(sess.activeSend.readId); } catch {} }
         if (sess.activeSend.mgr) sess.activeSend = null;
       }
@@ -4008,8 +4285,8 @@ async function streamManagerChunks(sess, send) {
 }
 
 // Chunks arrive faster than the disk IPC answers, so writes are CHAINED per transfer (in order, one at a time)
-// and "done" waits for the chain (writtenAll) before checking the size. Checking right away — while the last
-// chunks were still in flight — called complete files short and deleted them.
+// and "done" waits for the chain (writtenAll) before checking the size. Checking right away, while the last
+// chunks were still in flight, called complete files short and deleted them.
 function onFileChunk(sess, buf) {
   const rec = sess.activeRecv;
   if (!rec) return;
@@ -4093,7 +4370,7 @@ function createCard(sess, id, { dir, name, size, incoming }) {
   el.querySelector(".tc-close").addEventListener("click", () => {
     if (dir === "send" && sess.activeSend && sess.activeSend.id === id) {
       sess.activeSend.canceled = true;
-      // Still waiting for the receiver: withdraw the offer and stop waiting — otherwise the send never ends
+      // Still waiting for the receiver: withdraw the offer and stop waiting, otherwise the send never ends
       // and the session stays "busy" for every later transfer.
       if (sess.acceptResolver) { try { sess.fileChannel.send(JSON.stringify({ t: "cancel", id })); } catch {} sess.acceptResolver(false); }
     }
@@ -4115,9 +4392,9 @@ function createCard(sess, id, { dir, name, size, incoming }) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  File Manager — dual-pane browser + two-way transfer queue
+//  File Manager, dual-pane browser + two-way transfer queue
 // ═══════════════════════════════════════════════════════════
-// The file-manager overlay is modal and bound to ONE session at a time (fmSess) — the session
+// The file-manager overlay is modal and bound to ONE session at a time (fmSess), the session
 // whose remote filesystem it browses and whose fileChannel it transfers over. Per-session fm
 // state lives on the Session (sess.fm / sess.fmQueue / sess.mgrGetAck / ...).
 let fmSess = null;
@@ -4136,7 +4413,7 @@ function fmFileType(e) {
 }
 
 function fmFmtDate(ms) {
-  if (!ms) return "—";
+  if (!ms) return "-";
   const d = new Date(ms);
   const p = (n) => String(n).padStart(2, "0");
   return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`;
@@ -4348,7 +4625,7 @@ function fmCancelItem(i) {
   fmRenderQueue();
 }
 
-// The queue belongs to the session it was started on — captured once, because fmSess changes when the user
+// The queue belongs to the session it was started on, captured once, because fmSess changes when the user
 // opens the file manager on another tab while this queue is still running.
 async function fmStartQueue() {
   const sess = fmSess;
@@ -4382,7 +4659,7 @@ async function fmStartQueue() {
 
 // Each wait inside a transfer is registered as item._wake so a cancel can end it: the transfer then throws
 // "canceled" through its own catch, which closes the file, deletes a partial download and frees the session.
-// (Rejecting the outer promise directly left those cleanups — and the session's busy flag — hanging.)
+// (Rejecting the outer promise directly left those cleanups,and the session's busy flag,hanging.)
 function fmWait(item, setup) {
   return new Promise((resolve, reject) => {
     item._wake = () => reject(new Error("canceled"));
@@ -4469,6 +4746,9 @@ function openFileManager() {
   fmSess = sess;
   closeAllMenus();
   fmOpen = true;
+  // Concept: "Kirim file ke PC-Kantor." and the two sides named "PC ini" / the other PC.
+  { const who = peerName(sess.peerId) || (/^lan:/.test(sess.peerId) ? sess.peerId.slice(4) : fmtId(sess.peerId));
+    $("#fm-peer").textContent = `${who}.`; $("#fm-remote-tag").textContent = who; }
   $("#overlay-files").classList.remove("hidden");
   fmLoad("local", null, { home: true });
   fmLoad("remote", null, { home: true });
@@ -4525,7 +4805,7 @@ function sendQuality(sess) {
 
 function syncQualityUI() {
   const q = qualityOf();
-  $("#bitrate-slider").value = q.bitrate;
+  $("#bitrate-slider").value = q.bitrate; paintSlider($("#bitrate-slider"));
   $("#bitrate-number").value = Math.min(q.bitrate, BITRATE_MAX_MBPS);   // an older saved 500 shows as the real ceiling
   $$("#fps-row .chip").forEach((c) => c.classList.toggle("active", +c.dataset.fps === q.fps));
   $$("#res-row .chip").forEach((c) => c.classList.toggle("active", +c.dataset.scale === q.resHeight));
@@ -4550,7 +4830,16 @@ function setQuality(patch, { reconnectCodec = false } = {}) {
 function startStats(sess) {
   stopStats(sess);
   sess.statsLast = { bytes: 0, ts: 0 };
-  sess.statsTimer = setInterval(() => pollStats(sess), 1000);
+  sess.statsTimer = setInterval(() => pollStats(sess).then(() => { if (sess === active) ccSyncStats(); }), 1000);
+}
+// Session bar latency, design direction A: the number large, the unit small (red in CSS), as in the portfolio
+// video. The text stays "28 ms" (the phone toolbar mirrors this badge's textContent).
+function setLatBadge(sess) {
+  const b = $("#rt-latency-badge"); if (!b) return;
+  const m = /^(\d+)/.exec(sess.latencyText || "");
+  b.className = `sb-badge sb-lat ${sess.latencyClass || ""}`;
+  b.innerHTML = `<b>${m ? m[1] : "-"}</b> <small>ms</small>`;
+  const d = $("#fsd-lat"); if (d && sess === active) d.innerHTML = b.innerHTML;   // the full-screen dock shows it too
 }
 function stopStats(sess) { if (sess && sess.statsTimer) { clearInterval(sess.statsTimer); sess.statsTimer = null; } }
 
@@ -4583,7 +4872,7 @@ async function pollStats(sess) {
   // Adaptive low-latency receive buffer: size it to the measured jitter instead of a fixed value.
   // Clean LAN (jitter ~0) → ~6ms (feels instant); jittery/distant link → grows up to ~160ms to stay smooth.
   if (sess.videoReceiver) {
-    // Smooth the measurement (EMA) and only retune when it moves meaningfully — constantly resizing the
+    // Smooth the measurement (EMA) and only retune when it moves meaningfully, constantly resizing the
     // jitter buffer each tick caused its own playout stutter that read as flicker.
     const jitterMs = inbound && inbound.jitter != null ? inbound.jitter * 1000 : 0;
     sess._jitterAvg = sess._jitterAvg == null ? jitterMs : sess._jitterAvg * 0.8 + jitterMs * 0.2;
@@ -4604,7 +4893,7 @@ async function pollStats(sess) {
     $("#stat-res").textContent = (v && v.videoWidth) ? `${v.videoWidth}×${v.videoHeight}` : "-";
     $("#stat-codec").textContent = codecMime || "-";
   }
-  // Fast path on: the picture comes from the fast channel, not the (paused) WebRTC video — show its numbers.
+  // Fast path on: the picture comes from the fast channel, not the (paused) WebRTC video, show its numbers.
   const fst = sess.fast && sess.fast.on ? sess.fast.stats : null;
   if (fst) {
     const now = performance.now(), dt = fst.at ? (now - fst.at) / 1000 : 0;
@@ -4622,9 +4911,7 @@ async function pollStats(sess) {
     sess.latencyClass = rtt == null ? "" : rtt < 60 ? "lat-good" : rtt < 160 ? "lat-ok" : "lat-bad";
     if (show) {
       $("#stat-latency").textContent = rtt != null ? `${rtt} ms` : "-";
-      const latBadge = $("#rt-latency-badge");
-      latBadge.textContent = sess.latencyText;
-      latBadge.className = `sb-badge sb-lat ${sess.latencyClass}`;
+      setLatBadge(sess);
       const local = stats.get(pair.localCandidateId);
       const type = local ? local.candidateType : "";
       $("#stat-route").textContent = type === "relay" ? "Relay (TURN)" : type === "host" ? "P2P lokal" : "P2P langsung";
@@ -4691,7 +4978,7 @@ let panning = false, panStart = null;
 
 // ── Game mode: pointer-lock + relative mouse (for Minecraft/FPS and any pointer-capturing game) ──
 let gameMode = false, gameSens = 1, accDx = 0, accDy = 0, relTimer = null;
-// Host px per displayed CSS px — so a relative move maps 1:1 to the remote screen.
+// Host px per displayed CSS px, so a relative move maps 1:1 to the remote screen.
 function videoScale() {
   const video = activeVideo(); if (!video) return 1;
   const rect = video.getBoundingClientRect(); const vw = video.videoWidth, vh = video.videoHeight;
@@ -4705,7 +4992,7 @@ function flushRel() {
 function toggleGameMode() {
   const sess = active;
   if (!sess || sess.role !== "viewer") return;
-  if (sess.viewOnly) { showToast("Mode lihat saja aktif — matikan dulu untuk mode game"); return; }
+  if (sess.viewOnly) { showToast("Mode lihat saja aktif, matikan dulu untuk mode game"); return; }
   setGameCapture(!_gameActive);   // native capture (same path auto uses); reliable because the window is focused
 }
 
@@ -4713,13 +5000,13 @@ function toggleGameMode() {
 const dlog = (m) => { try { window.electronAPI && window.electronAPI.logInfo && window.electronAPI.logInfo(m); } catch {} };
 // Lock the pointer SYNCHRONOUSLY so the user's click still counts as the activation gesture.
 // (A promise-based requestPointerLock({unadjustedMovement}) fallback ran in an async callback where
-// the gesture is already gone, so Chromium refused the lock — that broke game capture. Keep it plain.)
+// the gesture is already gone, so Chromium refused the lock, that broke game capture. Keep it plain.)
 function lockPointer(el) {
   try { el.requestPointerLock(); } catch (e) { try { showToast("Gagal mengunci mouse untuk game: " + e.message); } catch {} }
 }
 
 // Automatic game mode: the host tells us when a game/app captures its cursor; the viewer switches to
-// NATIVE relative-mouse capture (main-process low-level hook) with NO user action — no toggle, no click, no
+// NATIVE relative-mouse capture (main-process low-level hook) with NO user action, no toggle, no click, no
 // pointer-lock gesture. The game gets true 360° mouse-look; Pause/Break releases it.
 let _pendingGame = false;   // pointer-lock fallback is armed when native capture can't install
 function setGameCapture(on) {
@@ -4730,7 +5017,7 @@ function setGameCapture(on) {
   dlog("setGameCapture " + (on ? "ON" : "OFF"));
   try { window.electronAPI && window.electronAPI.setMouseCapture && window.electronAPI.setMouseCapture(on); } catch {}
   if (on) {
-    // Force keyboard capture ON too, so the ESCAPE keys (Pause, Ctrl+Alt+Shift+Esc) are always caught — otherwise
+    // Force keyboard capture ON too, so the ESCAPE keys (Pause, Ctrl+Alt+Shift+Esc) are always caught, otherwise
     // the mouse could be locked to the remote with no way back.
     try { window.electronAPI && window.electronAPI.setKeyCapture && window.electronAPI.setKeyCapture(true); } catch {}
     showGameBanner(true);
@@ -4739,6 +5026,9 @@ function setGameCapture(on) {
     showGameBanner(false);
     try { if (document.pointerLockElement) document.exitPointerLock(); } catch {}
   }
+  // Every button that shows game mode follows the real state (owner, 6 Nov: it stayed "on" after game mode ended).
+  try { ccRefresh(); } catch {}
+  document.dispatchEvent(new CustomEvent("td-game-mode", { detail: on }));
 }
 // Persistent on-screen reminder of how to get the mouse/keyboard back while game mode holds them captive.
 function showGameBanner(on) {
@@ -4748,7 +5038,7 @@ function showGameBanner(on) {
       b = document.createElement("div");
       b.id = "game-banner";
       // Mac and Linux lock the mouse with the browser's pointer lock, which Esc always releases (no Pause key there).
-      b.textContent = viewerOnlyDesktop() ? "🎮 Mode game aktif — tekan Esc untuk lepas mouse" : "🎮 Mode game aktif — tekan Pause (atau Ctrl+Alt+Shift+Esc) untuk lepas kontrol";
+      b.textContent = viewerOnlyDesktop() ? "🎮 Mode game aktif, tekan Esc untuk lepas mouse" : "🎮 Mode game aktif, tekan Pause (atau Ctrl+Alt+Shift+Esc) untuk lepas kontrol";
       document.body.appendChild(b);
     }
     b.style.display = "";
@@ -4767,7 +5057,7 @@ function setAutoGame(sess, on) {
   // apps hide the cursor while typing/idle), which wrongly locked + re-centered the viewer's mouse
   // ("cursor jumps to center"), blocked clicking the UI ("can't change FPS"), and looked like flicker.
   // Game mouse is now MANUAL only: Control Center -> Fitur lainnya -> "Mode game (mouse)".
-  dlog("game-auto received on=" + on + " (ignored — game mouse is manual only)");
+  dlog("game-auto received on=" + on + " (ignored, game mouse is manual only)");
 }
 // An admin window (Task Manager, admin CMD) in front of a non-elevated host: Windows drops our clicks and keys and
 // hides the cursor over it. Host: tell the viewer, and say once here how to allow it. Viewer: show why, until it closes.
@@ -4815,7 +5105,9 @@ function setupInputCapture() {
     dlog("pointerlockchange gameMode=" + gameMode);
     container.classList.toggle("game-mode", gameMode);
     if (!gameMode) { accDx = accDy = 0; if (relTimer) { clearTimeout(relTimer); relTimer = null; } }
-    showToast(gameMode ? "Mode game aktif — gerakan mouse relatif. Tekan Esc untuk keluar" : "Mode game nonaktif");
+    // Esc released the pointer lock (fallback path, Mac/Linux): game mode is over, so say so everywhere.
+    if (!gameMode && _gameActive) setGameCapture(false);
+    showToast(gameMode ? "Mode game aktif, gerakan mouse relatif. Tekan Esc untuk keluar" : "Mode game nonaktif");
   });
   let lastMove = null, lastSentAt = 0, moveTimer = null;
   const flushMove = () => { moveTimer = null; lastSentAt = performance.now(); if (lastMove) sendMove(lastMove); };
@@ -4848,7 +5140,7 @@ function setupInputCapture() {
       sendInput({ action: "mousedown", button: BUTTONS[e.button] || "left" });
       return;
     }
-    if (canPan() && e.button === 1) {   // pan with middle-mouse drag only — never hijack Space
+    if (canPan() && e.button === 1) {   // pan with middle-mouse drag only, never hijack Space
       panning = true;
       container.classList.add("panning");
       panStart = { x: e.clientX, y: e.clientY, sl: container.scrollLeft, st: container.scrollTop };
@@ -4913,7 +5205,7 @@ function setupInputCapture() {
     });
   }
   // Release every still-held key when the viewer loses focus (Alt+Tab, click away, minimize). Without
-  // this a lost keyup leaves Ctrl/Alt/Shift "stuck down" on the host — breaking typing, copy/paste and
+  // this a lost keyup leaves Ctrl/Alt/Shift "stuck down" on the host, breaking typing, copy/paste and
   // shortcuts afterwards. Covers the #1 cause of "keyboard tidak sinkron".
   function releaseAllKeys() {
     if (!pressedKeys.size) return;
@@ -4959,11 +5251,11 @@ function setupInputCapture() {
       setGameCapture(false);
       releaseAllKeys();
       // Really hand the keyboard back too (until the user clicks into the remote view again), and leave
-      // fullscreen — Esc itself goes to the remote, so this is the way out.
+      // fullscreen, Esc itself goes to the remote, so this is the way out.
       _kbReleased = true;
       refreshKeyCapture();
       if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-      showToast("Kontrol dilepas — mouse & keyboard kembali ke PC ini. Klik layar remote untuk lanjut.");
+      showToast("Kontrol dilepas, mouse & keyboard kembali ke PC ini. Klik layar remote untuk lanjut.");
     });
   }
   // Pause capture while a local text field is focused (so the user can type in TryDesk's own UI), resume after.
@@ -4972,16 +5264,24 @@ function setupInputCapture() {
 }
 
 // ─── Settings overlay ─────────────────────────────────────
-function toggleSettings() { if (overlaySettings.classList.toggle("hidden") === false) syncDefaultQualityUI(); }
+function toggleSettings() {
+  if (overlaySettings.classList.toggle("hidden") === false) {
+    syncDefaultQualityUI();
+    const pane = $(".settings-tab-content:not(.hidden)");
+    arrive(overlaySettings.querySelector(".settings-panel"), pane?.querySelector(".tab-lead"));
+  }
+}
 
-// Settings tabs
+// Settings tabs: the page's sentence rises again each time another page opens (one beat).
 $$(".stab").forEach((tab) => {
   tab.addEventListener("click", () => {
+    const was = tab.classList.contains("active");
     $$(".stab").forEach((t) => t.classList.remove("active"));
     tab.classList.add("active");
     $$(".settings-tab-content").forEach((c) => c.classList.add("hidden"));
-    const target = tab.dataset.tab;
-    $(`#${target}`).classList.remove("hidden");
+    const pane = $(`#${tab.dataset.tab}`);
+    pane.classList.remove("hidden");
+    if (!was) arrive(pane, pane.querySelector(".tab-lead"));
   });
 });
 
@@ -4993,14 +5293,21 @@ $("#btn-save-alias").addEventListener("click", () => {
 });
 
 // Theme
+// Tema: Gelap / Terang / Ikuti Windows (on a phone: Ikuti HP), shown as one segment in Settings → Umum.
+const _lightMq = window.matchMedia ? window.matchMedia("(prefers-color-scheme: light)") : null;
 function applyTheme(theme) {
-  if (theme === "light") document.documentElement.setAttribute("data-theme", "light");
+  const light = theme === "light" || (theme === "system" && !!_lightMq && _lightMq.matches);
+  if (light) document.documentElement.setAttribute("data-theme", "light");
   else document.documentElement.removeAttribute("data-theme");
+  $$("#theme-seg button").forEach((b) => { const on = b.dataset.v === theme; b.classList.toggle("on", on); b.setAttribute("aria-checked", String(on)); });
 }
+_lightMq?.addEventListener?.("change", () => { if (store.get("theme") === "system") applyTheme("system"); });
 $("#setting-theme").addEventListener("change", (e) => {
   applyTheme(e.target.value);
   store.set("theme", e.target.value);
 });
+$$("#theme-seg button").forEach((b) => b.addEventListener("click", () => { const s = $("#setting-theme"); s.value = b.dataset.v; s.dispatchEvent(new Event("change")); }));
+$("#btn-settings-back").addEventListener("click", () => $("#btn-settings-close").click());
 
 // Language
 $("#setting-language").addEventListener("change", (e) => {
@@ -5016,7 +5323,7 @@ $("#setting-auto-reconnect").addEventListener("change", (e) => {
 });
 
 // ─── Preferences (Settings panel) ─────────────────────────
-// Every control in the panel is saved under its key and APPLIED where it matters — nothing there is decoration.
+// Every control in the panel is saved under its key and APPLIED where it matters, nothing there is decoration.
 // Booleans persist as "1"/"0". apply(value, atStartup) runs on load and on every change.
 const PREFS = {
   notifyIncoming: { el: "#setting-notify-incoming", def: true },
@@ -5038,7 +5345,7 @@ const PREFS = {
                     apply: (v) => { statsOverlay.classList.toggle("hidden", !v); const cb = $("#stats-toggle"); if (cb) cb.checked = v; } },
   autoAudio:      { el: "#setting-auto-audio", def: false },
   audioVolume:    { el: "#setting-audio-volume", def: "100",
-                    apply: (v) => { $("#setting-audio-volume-num").value = v; for (const s of viewerSessions()) if (s.video) s.video.volume = v / 100; } },
+                    apply: (v) => { $("#setting-audio-volume-num").textContent = `${v}%`; paintSlider($("#setting-audio-volume")); for (const s of viewerSessions()) if (s.video) s.video.volume = v / 100; } },
 };
 function prefGet(name) {
   const p = PREFS[name];
@@ -5059,10 +5366,6 @@ function initPrefs() {
     if (p.apply) p.apply(v, true);
     el.addEventListener(el.type === "range" ? "input" : "change", () => prefSet(name, el.type === "checkbox" ? el.checked : el.value));
   }
-  $("#setting-audio-volume-num").addEventListener("change", (e) => {
-    const v = String(Math.max(0, Math.min(100, Math.round(Number(e.target.value) || 0))));
-    $("#setting-audio-volume").value = v; prefSet("audioVolume", v);
-  });
   // The stats toggle on the remote screen and this setting are the same preference.
   $("#stats-toggle").addEventListener("change", (e) => { const s = $("#setting-autostats"); if (s) s.checked = e.target.checked; });
   // OS-level settings: Windows is the source of truth.
@@ -5098,7 +5401,7 @@ function syncDefaultQualityUI() {
   $("#setting-default-codec").value = q.codec || "auto";
 }
 async function resetSettings() {
-  const ok = await window.electronAPI.confirm({
+  const ok = await appConfirm({
     title: tr("Reset semua pengaturan?"), message: tr("Semua pengaturan kembali ke bawaan."),
     detail: tr("ID, favorit, riwayat koneksi dan password akses tetap disimpan. TryDesk akan dimuat ulang."),
     okLabel: tr("Reset"), cancelLabel: tr("Batal"),
@@ -5111,7 +5414,7 @@ async function resetSettings() {
   try { await window.electronAPI.setLoginItem(false); await window.electronAPI.setHwAccel(true); } catch {}
   location.reload();
 }
-// Short two-tone chime for an incoming request (WebAudio — no sound file to ship).
+// Short two-tone chime for an incoming request (WebAudio, no sound file to ship).
 function chime() {
   try {
     const ctx = new AudioContext(), g = ctx.createGain(); g.connect(ctx.destination); g.gain.value = 0.08;
@@ -5205,6 +5508,50 @@ $("#btn-connect-files").addEventListener("click", () => {
   else s.openFilesWhenReady = true;
 });
 $("#recent-clear").addEventListener("click", clearRecent);
+$("#rs-all").addEventListener("click", () => setDevicesOpen(true));
+$("#dev-back").addEventListener("click", () => setDevicesOpen(false));
+$("#fact-lan-help").addEventListener("click", (e) => { e.stopPropagation(); $("#btn-lan-help").click(); });
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && document.documentElement.classList.contains("devices-open") && !tileMenuEl && !document.querySelector(".tile-rename")) setDevicesOpen(false);
+}, true);   // capture: runs before the tile menu's own Escape, so Escape on an open menu closes only the menu
+// The ⋮ beside grid/list (concept): sorting and "clear all" in one small menu, same look as a tile's menu.
+$("#recent-more").addEventListener("click", (e) => {
+  e.stopPropagation();
+  if (tileMenuEl) { closeTileMenu(); return; }
+  closeAllMenus();
+  const btn = e.currentTarget, phone = isPhoneUi();
+  const check = `<polyline points="20 6 9 17 4 12"/>`;
+  const items = [
+    ["head", "Urutkan"],
+    ["Terbaru", recentSort === "recent" ? check : "", () => { const s = $("#recent-sort"); s.value = "recent"; s.dispatchEvent(new Event("change")); }],
+    ["Nomor ID", recentSort === "id" ? check : "", () => { const s = $("#recent-sort"); s.value = "id"; s.dispatchEvent(new Event("change")); }],
+  ];
+  // Phone (complete concept): grid / list live in this menu instead of two buttons on the row.
+  if (phone) items.push("-", ["head", "Tampilan"],
+    ["Grid", recentView === "grid" ? check : "", () => $("#view-grid").click()],
+    ["Daftar", recentView === "list" ? check : "", () => $("#view-list").click()]);
+  if (homeTab === "recent" && getRecent().length) items.push("-", ["Hapus semua riwayat", TILE_ICON.remove, clearRecent, true]);
+  const m = document.createElement("div");
+  m.className = "tile-menu"; m.setAttribute("role", "menu"); m.tabIndex = -1;
+  for (const it of items) {
+    if (it === "-") { const sep = document.createElement("div"); sep.className = "tile-menu-sep"; m.appendChild(sep); continue; }
+    if (it[0] === "head") { const h = document.createElement("div"); h.className = "tile-menu-head"; h.textContent = it[1]; m.appendChild(h); continue; }
+    const [label, icon, fn, danger] = it;
+    const b = document.createElement("button");
+    b.className = "cc-item" + (danger ? " danger" : ""); b.setAttribute("role", "menuitem");
+    b.innerHTML = tileSvg(icon || ""); b.append(document.createTextNode(label));
+    b.addEventListener("click", (ev) => { ev.stopPropagation(); closeTileMenu(); fn(); });
+    m.appendChild(b);
+  }
+  document.body.appendChild(m);
+  tileMenuEl = m;
+  if (!phone) {
+    const r = btn.getBoundingClientRect(), w = m.offsetWidth, h = m.offsetHeight;
+    let top = r.bottom + 4; if (top + h > innerHeight - 8) top = Math.max(8, r.top - 4 - h);
+    m.style.left = `${Math.max(8, Math.min(r.right - w, innerWidth - w - 8))}px`; m.style.top = `${top}px`;
+  }
+  m.focus({ preventScroll: true });
+});
 $("#view-grid").addEventListener("click", () => { recentView = "grid"; store.set("recentView", "grid"); applyRecentView(); });
 $("#view-list").addEventListener("click", () => { recentView = "list"; store.set("recentView", "list"); applyRecentView(); });
 $("#btn-cancel-connect").addEventListener("click", () => { if (active) { stopReconnect(active.peerId); closeSession(active, false); } });
@@ -5236,10 +5583,11 @@ function positionMenu(menu, btn) {
 }
 let ccFlyoutCat = null, ccFlyoutRow = null;
 function closeAllMenus() {
-  $("#control-center")?.classList.add("hidden");
+  // The docked Control Center (desktop) is a panel, not a menu: it stays until Control Center or its × is pressed.
+  if (!(typeof ccDocked !== "undefined" && ccDocked)) $("#control-center")?.classList.add("hidden");
   $("#cc-flyout")?.classList.add("hidden");
   $("#monitor-menu")?.classList.add("hidden");
-  $("#btn-control-center")?.classList.remove("open");
+  if (!(typeof ccDocked !== "undefined" && ccDocked)) $("#btn-control-center")?.classList.remove("open");
   $("#btn-monitor")?.classList.remove("open");
   ccFlyoutCat = null; ccFlyoutRow = null;
 }
@@ -5269,6 +5617,8 @@ const CC_CATS = [
 function ccPresetMatch() { const q = qualityOf(); const e = Object.entries(PRESETS).find(([, p]) => p.bitrate === q.bitrate && p.fps === q.fps && p.resHeight === q.resHeight); return e ? e[0] : null; }
 function ccStatsShown() { return !statsOverlay.classList.contains("hidden"); }
 function ccShowKeyMenu() {
+  // In full screen the session bar is away: the menu opens above the dock instead of under Control Center.
+  if (document.documentElement.classList.contains("fs-session")) return fsMenuAbove($("#key-menu"), $("#fsd-keys"));
   const menu = $("#key-menu"); const a = $("#btn-control-center").getBoundingClientRect();
   menu.classList.remove("hidden");
   menu.style.top = `${a.bottom + 8}px`;
@@ -5351,27 +5701,143 @@ function ccItems(cat) {
   return [];
 }
 
+// Direction A: the session's live numbers open Control Center, big with a small red unit (as in the portfolio
+// video). They are read from the stats widgets pollStats already fills for the active tab, every second.
+const CC_STATS = [["cc-st-fps", "fps", "gambar"], ["cc-st-lat", "ms", "jeda"], ["cc-st-mbps", "Mbps", "data"]];
+function ccSyncStats() {
+  const f = $("#cc-st-fps"); if (!f || $("#control-center").classList.contains("hidden")) return;
+  const num = (sel) => { const m = /\d+(\.\d+)?/.exec($(sel)?.textContent || ""); return m ? m[0] : null; };
+  const mb = num("#stat-bitrate");
+  f.textContent = num("#stat-fps") ?? "-";
+  $("#cc-st-lat").textContent = num("#stat-latency") ?? "-";
+  $("#cc-st-mbps").textContent = mb == null ? "-" : String(Math.round(parseFloat(mb)));
+}
+// ─── Control Center as a panel docked on the right (desktop) ───
+// The remote picture gets narrower, nothing is covered; it stays open until Control Center or its × is pressed. Full
+// screen and the phone open the same content as a menu. "Pengaturan lanjutan" opens the quality panel in the same place.
+let ccDocked = false;
+const ccDockMode = () => !isPhoneUi() && !document.documentElement.classList.contains("fs-session");
+function ccSetDocked(on) {
+  ccDocked = !!on && ccDockMode();
+  const cc = $("#control-center");
+  // Leaving: keep the docked look until the panel has slid out (it used to turn into the floating menu for 140 ms).
+  const leavingDocked = !ccDocked && cc.classList.contains("cc-panel-docked") && !cc.classList.contains("hidden") && !motionOff();
+  if (!leavingDocked) cc.classList.toggle("cc-panel-docked", ccDocked);
+  $("#screen-remote").classList.toggle("cc-docked", ccDocked || (!qualityPanel.classList.contains("hidden") && ccDockMode()));
+  clearTimeout(ccSetDocked.t);
+  cc.classList.remove("cc-leaving");
+  if (ccDocked) { ccSub = null; ccRender(); cc.classList.remove("hidden"); $("#btn-control-center").classList.add("open"); ccSyncStats(); }
+  else if (!cc.classList.contains("hidden") && !motionOff()) {
+    // Out in a quarter beat (it came in on a half), then hidden; the screen widens back in the same move.
+    cc.classList.add("cc-leaving"); $("#btn-control-center").classList.remove("open");
+    ccSetDocked.t = setTimeout(() => { cc.classList.remove("cc-leaving"); if (!ccDocked) { cc.classList.add("hidden"); cc.classList.remove("cc-panel-docked"); } }, 140);
+  } else { cc.classList.add("hidden"); $("#btn-control-center").classList.remove("open"); }
+  try { applyScale(); } catch {}
+}
+function ccRefresh() { if (!$("#control-center").classList.contains("hidden")) { ccRender(); ccSyncStats(); } }
+// Owner round 2 (6 Nov night): the OLD Control Center list (icon, name, value, ›) inside the panel. A category opens
+// in the same panel with "‹ Control Center" to go back; the live numbers stay on top. One level, nothing floats.
+let ccSub = null;
 function ccRender() {
   const cc = $("#control-center");
-  cc.replaceChildren();
-  for (const c of CC_CATS) {
-    const row = document.createElement("button");
-    row.className = "cc-cat"; row.dataset.cat = c.key;
-    const v = c.value ? c.value() : "";
-    row.innerHTML = `${ccSvg(CC_ICON[c.key])}<span class="cc-cat-label">${c.label}</span>${v ? `<span class="cc-cat-val">${v}</span>` : ""}<svg class="cc-cat-arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="9 18 15 12 9 6"/></svg>`;
-    cc.appendChild(row);
+  const keepScroll = cc.scrollTop;
+  // Going into a category or back: the rows below the numbers slide in (half a beat). A switch flipping inside the
+  // same view re-renders without moving.
+  if (ccRender.last !== ccSub && !motionOff()) {
+    cc.classList.remove("cc-swap", "cc-swap-back"); void cc.offsetWidth;
+    cc.classList.add(ccSub ? "cc-swap" : "cc-swap-back");
+    clearTimeout(ccRender.t); ccRender.t = setTimeout(() => cc.classList.remove("cc-swap", "cc-swap-back"), 400);
   }
-  const divider = document.createElement("div"); divider.className = "cc-divider"; cc.appendChild(divider);
-  const fs = document.createElement("button"); fs.className = "cc-leaf";
-  fs.innerHTML = `${ccSvg(CC_ICON.window, 15)}<span>${document.fullscreenElement ? "Keluar layar penuh" : "Layar penuh"}</span>`;
-  fs.addEventListener("click", (e) => { e.stopPropagation(); $("#btn-fullscreen").click(); ccClose(); });
-  cc.appendChild(fs);
-  const dc = document.createElement("button"); dc.className = "cc-leaf danger";
-  dc.innerHTML = `${ccSvg(CC_ICON.x, 15)}<span>Putuskan koneksi</span>`;
-  dc.addEventListener("click", (e) => { e.stopPropagation(); ccClose(); $("#btn-disconnect").click(); });
-  cc.appendChild(dc);
+  ccRender.last = ccSub;
+  cc.replaceChildren();
+  cc.classList.add("cc-panel");
+  const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
+  // Head
+  const head = el("div", "ccp-head");
+  if (ccSub) {
+    const back = el("button", "ccp-back"); back.type = "button";
+    back.innerHTML = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><polyline points="15 18 9 12 15 6"/></svg><span>Control Center</span>`;
+    back.addEventListener("click", (e) => { e.stopPropagation(); ccSub = null; ccRender(); ccSyncStats(); });
+    head.appendChild(back);
+  } else {
+    const title = el("h3", "ccp-title"); title.textContent = "Control Center"; head.appendChild(title);
+  }
+  const x = el("button", "ccp-x"); x.type = "button"; x.innerHTML = ccSvg(CC_ICON.x, 15); x.title = "Tutup"; x.setAttribute("aria-label", "Tutup Control Center");
+  x.addEventListener("click", (e) => { e.stopPropagation(); ccSub = null; if (ccDocked) ccSetDocked(false); else ccClose(); });
+  head.appendChild(x); cc.appendChild(head);
+  // Live numbers
+  const st = el("div", "cc-stats");
+  st.innerHTML = CC_STATS.map(([id, unit, label]) => `<div><span class="cc-st-num"><b id="${id}">-</b><small>${unit}</small></span><span class="cc-st-label">${label}</span></div>`).join("");
+  cc.appendChild(st);
+  if (!ccSub) {
+    // The list
+    for (const c of CC_CATS) {
+      const row = el("button", "cc-cat"); row.type = "button"; row.dataset.cat = c.key;
+      const v = c.value ? c.value() : "";
+      row.innerHTML = `${ccSvg(CC_ICON[c.key])}<span class="cc-cat-label"></span>${v ? `<span class="cc-cat-val"></span>` : ""}<svg class="cc-cat-arrow" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><polyline points="9 18 15 12 9 6"/></svg>`;
+      row.querySelector(".cc-cat-label").textContent = c.label;
+      if (v) row.querySelector(".cc-cat-val").textContent = v;
+      row.addEventListener("click", (e) => { e.stopPropagation(); ccSub = c.key; cc.scrollTop = 0; ccRender(); ccSyncStats(); });
+      cc.appendChild(row);
+    }
+    cc.appendChild(el("div", "cc-divider"));
+    const fs = el("button", "cc-leaf cc-fs-leaf"); fs.type = "button";
+    fs.innerHTML = `${ccSvg(CC_ICON.window, 15)}<span></span>`; fs.lastChild.textContent = document.fullscreenElement ? "Keluar layar penuh" : "Layar penuh";
+    fs.addEventListener("click", (e) => { e.stopPropagation(); $("#btn-fullscreen").click(); if (!ccDocked) ccClose(); });
+    cc.appendChild(fs);
+  } else {
+    // One category: its title, then its items (a check on the current choice, headers and dividers as in the old flyout)
+    const c = CC_CATS.find((k) => k.key === ccSub);
+    const t = el("div", "ccp-subtitle"); t.textContent = c ? c.label : ""; cc.appendChild(t);
+    for (const it of ccItems(ccSub)) {
+      if (it.divider) { cc.appendChild(el("div", "cc-divider")); continue; }
+      if (it.header) { const h = el("div", "cc-flyout-header"); h.textContent = it.header; cc.appendChild(h); continue; }
+      if (it.slider) {
+        const w = el("div", "cc-flyout-slider");
+        const lab = el("span"); lab.textContent = "Volume";
+        const r = document.createElement("input"); r.type = "range"; r.min = "0"; r.max = "100"; r.value = String(Math.round(((activeVideo()?.volume) ?? 1) * 100));
+        r.addEventListener("input", () => { const v = activeVideo(); if (v) v.volume = r.value / 100; });
+        r.addEventListener("click", (e) => e.stopPropagation());
+        w.append(lab, r); cc.appendChild(w); continue;
+      }
+      // On/off items are switches (concept picture 4); choices (preset, FPS, monitor, size) keep the check mark.
+      const SW = { "Mode lihat saja": 1, "Gelapkan layar host": 1, "Kunci input host": 1, "Tampilkan statistik": 1, "Sinkron clipboard": 1 };
+      let swLabel = null;
+      if (SW[it.label]) swLabel = it.label;
+      else if (/^Mode game/.test(it.label)) swLabel = "Mode game (mouse relatif)";
+      else if (/^(Rekam sesi|Hentikan rekaman)$/.test(it.label)) swLabel = "Rekam sesi";
+      else if (/audio remote$/.test(it.label)) swLabel = "Suara dari PC";
+      if (swLabel) {
+        const b = el("button", "ccp-switch"); b.type = "button"; b.setAttribute("role", "switch"); b.setAttribute("aria-checked", String(!!it.active));
+        b.innerHTML = `<span></span><i class="ccp-tog${it.active ? " on" : ""}"></i>`; b.firstChild.textContent = swLabel;
+        if (it.disabled) b.disabled = true;
+        else b.addEventListener("click", (e) => { e.stopPropagation(); if (it.run) it.run(); ccRender(); ccSyncStats(); });
+        cc.appendChild(b); continue;
+      }
+      const ACT = { "Transfer file": `<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>`, "Chat": `<path d="M4 5h16v11H9l-5 4z"/>`,
+        "Kombinasi tombol": `<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M7 14h10"/>`,
+        "Ambil screenshot": `<path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/>` };
+      const b = el("button", "cc-leaf" + (it.active ? " active" : "") + (ACT[it.label] ? " cc-act" : "")); b.type = "button";
+      if (it.disabled) b.disabled = true;
+      b.innerHTML = ACT[it.label] ? `${ccSvg(ACT[it.label], 15)}<span></span>` : `<span class="cc-leaf-check">${it.active ? CC_CHECK : ""}</span><span></span>`; b.lastChild.textContent = it.label;
+      if (!it.disabled) b.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (it.run) it.run();
+        if (it.close && !ccDocked) ccClose(); else { ccRender(); ccSyncStats(); }
+      });
+      cc.appendChild(b);
+    }
+  }
+  cc.scrollTop = keepScroll;
 }
-
+function ccOpenAdvanced() {
+  qualityPanel.classList.remove("hidden");
+  $("#btn-quality").classList.add("active");
+  syncQualityUI();
+  $("#screen-remote").classList.toggle("cc-docked", ccDockMode());
+  $("#control-center").classList.add("hidden");   // the advanced panel takes the same place; "‹ Control Center" brings it back
+  try { applyScale(); } catch {}
+}
 function ccOpenFlyout(cat, rowEl) {
   ccFlyoutCat = cat; ccFlyoutRow = rowEl;
   const fly = $("#cc-flyout");
@@ -5415,9 +5881,10 @@ function ccClose() { closeAllMenus(); }
 $("#btn-control-center").addEventListener("click", (e) => {
   e.stopPropagation();
   const menu = $("#control-center"), btn = $("#btn-control-center");
+  if (ccDockMode()) { closeAllMenus(); ccSetDocked(!ccDocked); return; }
   const open = menu.classList.contains("hidden");
   closeAllMenus();
-  if (open) { ccRender(); menu.classList.remove("hidden"); btn.classList.add("open"); positionMenu(menu, btn); }
+  if (open) { ccSub = null; ccRender(); menu.classList.remove("hidden"); btn.classList.add("open"); positionMenu(menu, btn); ccSyncStats(); }
 });
 $("#control-center").addEventListener("click", (e) => {
   const cat = e.target.closest(".cc-cat");
@@ -5436,12 +5903,73 @@ document.addEventListener("fullscreenchange", () => {
   $("#btn-fullscreen")?.classList.toggle("active", fs);
   // Keyboard Lock (fullscreen-only, browser limit) lets the remote view capture system shortcuts like
   // Alt+Tab, the Win key and Esc so they reach the host instead of the local OS. Outside fullscreen the
-  // OS always grabs them — so system shortcuts forward only in fullscreen.
+  // OS always grabs them, so system shortcuts forward only in fullscreen.
   try {
     if (fs && navigator.keyboard && navigator.keyboard.lock) navigator.keyboard.lock();
     else if (!fs && navigator.keyboard && navigator.keyboard.unlock) navigator.keyboard.unlock();
   } catch {}
+  // Full screen has no session bar: a docked Control Center steps away (the dock's Menu opens the same content).
+  if (fs && ccDocked) ccSetDocked(false);
+  fsDockSync();
 });
+
+// ─── Full-screen dock (design direction C) ───
+// In full screen the session bar steps away (html.fs-session) and #fs-dock floats at the bottom centre with the
+// session's latency and the actions people reach for. It shows for 2 s after entering full screen and whenever the
+// pointer comes within 90 px of the bottom edge; it stays while hovered, focused or while its menu is open.
+// Every handler stops the click so the page-level "click outside closes menus" handlers don't undo it.
+let fsDockTimer = null;
+function fsDockSync() {
+  const dock = $("#fs-dock"); if (!dock) return;
+  const on = !!document.fullscreenElement && !$("#screen-remote").classList.contains("hidden") && !document.documentElement.classList.contains("td-mobile");
+  document.documentElement.classList.toggle("fs-session", on);
+  if (!on) { clearTimeout(fsDockTimer); dock.classList.add("hidden"); return; }
+  fsDockWake();
+}
+function fsDockLabels() {
+  const sess = active;
+  $("#fsd-peer").textContent = sess ? (sess.label || fmtId(sess.peerId)) : "";
+  $("#fsd-monitor-label").textContent = `Layar ${sess ? sess.currentMonitor + 1 : 1}`;
+  $("#fsd-lat").innerHTML = $("#rt-latency-badge").innerHTML;   // <b>n</b> <small>ms</small> from setLatBadge
+}
+function fsDockWake() {
+  const dock = $("#fs-dock");
+  if (!document.documentElement.classList.contains("fs-session")) return;
+  fsDockLabels();
+  dock.classList.remove("hidden");
+  clearTimeout(fsDockTimer);
+  fsDockTimer = setTimeout(() => {
+    const busy = dock.matches(":hover") || dock.contains(document.activeElement) || !$("#control-center").classList.contains("hidden") || !$("#key-menu").classList.contains("hidden");
+    if (busy) fsDockWake(); else dock.classList.add("hidden");
+  }, 2000);
+}
+function fsMenuAbove(menu, btn) {
+  menu.classList.remove("hidden");
+  const r = btn.getBoundingClientRect();
+  menu.style.top = `${Math.max(8, r.top - menu.offsetHeight - 10)}px`;
+  menu.style.left = `${Math.round(Math.min(Math.max(8, r.left + r.width / 2 - menu.offsetWidth / 2), window.innerWidth - menu.offsetWidth - 8))}px`;
+}
+document.addEventListener("mousemove", (e) => {
+  if (document.documentElement.classList.contains("fs-session") && e.clientY > window.innerHeight - 90) fsDockWake();
+}, { passive: true });
+const fsDockOn = (id, fn) => $(id).addEventListener("click", (e) => { e.stopPropagation(); fn(e); fsDockWake(); });
+fsDockOn("#fsd-keys", () => { const m = $("#key-menu"); if (!m.classList.contains("hidden")) { m.classList.add("hidden"); return; } closeAllMenus(); ccShowKeyMenu(); });
+fsDockOn("#fsd-monitor", () => {
+  const list = ccItems("monitor").filter((it) => it.run);
+  if (list.length < 2) { showToast("Hanya 1 monitor terdeteksi"); return; }
+  const i = list.findIndex((it) => it.active);
+  list[(i + 1) % list.length].run();
+});
+fsDockOn("#fsd-menu", () => {
+  const menu = $("#control-center"), open = menu.classList.contains("hidden");
+  closeAllMenus(); $("#key-menu").classList.add("hidden");
+  if (!open) return;
+  ccSub = null; ccRender(); fsMenuAbove(menu, $("#fsd-menu")); ccSyncStats();
+});
+fsDockOn("#fsd-file", () => { closeAllMenus(); openFileManager(); });
+fsDockOn("#fsd-chat", () => { closeAllMenus(); toggleChat(); });
+fsDockOn("#fsd-exit", () => { closeAllMenus(); if (document.fullscreenElement) document.exitFullscreen().catch(() => {}); });
+fsDockOn("#fsd-disconnect", () => { closeAllMenus(); $("#btn-disconnect").click(); });
 
 // Session timer (per session; only the active tab writes to #session-timer)
 function startSessionTimer(sess) {
@@ -5473,12 +6001,21 @@ $("#btn-viewonly").addEventListener("click", () => {
 
 // Quality panel open/close
 $("#btn-quality").addEventListener("click", () => {
-  const open = qualityPanel.classList.toggle("hidden");
-  $("#btn-quality").classList.toggle("active", !open);
-  if (!open) syncQualityUI();
+  if (qualityPanel.classList.contains("hidden")) { ccOpenAdvanced(); return; }
+  qualityPanel.classList.add("hidden"); $("#btn-quality").classList.remove("active");
+  if (ccDocked) ccSetDocked(true); else { $("#screen-remote").classList.remove("cc-docked"); try { applyScale(); } catch {} }
+});
+// "‹ Control Center": back to the panel underneath (it stays docked; in full screen it opens again above the dock).
+$("#btn-quality-back").addEventListener("click", (e) => {
+  e.stopPropagation();
+  qualityPanel.classList.add("hidden"); $("#btn-quality").classList.remove("active");
+  if (ccDockMode()) { ccSetDocked(true); ccSub = "quality"; ccRender(); ccSyncStats(); }
+  else { ccRender(); $("#control-center").classList.remove("hidden"); if (!isPhoneUi()) fsMenuAbove($("#control-center"), $("#fsd-menu")); ccSyncStats(); }
 });
 $("#btn-quality-close").addEventListener("click", () => {
   qualityPanel.classList.add("hidden");
+  if (ccDocked) ccSetDocked(false);
+  $("#screen-remote").classList.remove("cc-docked"); try { applyScale(); } catch {}
   $("#btn-quality").classList.remove("active");
 });
 
@@ -5489,9 +6026,18 @@ $("#scale-select").addEventListener("change", (e) => { scaleMode = e.target.valu
 $$(".preset-btn").forEach((b) => b.addEventListener("click", () => setQuality(PRESETS[b.dataset.preset])));
 
 // Bitrate slider + number
+// Sliders (concept): a 4 px line, red up to the value, white knob with a red ring. The red part is a CSS variable
+// kept in step with the value here, because a range input has no "filled part" of its own in Chromium.
+function paintSlider(el) {
+  if (!el) return;
+  const min = Number(el.min) || 0, max = Number(el.max) || 100;
+  el.style.setProperty("--pct", `${((Number(el.value) - min) / (max - min || 1)) * 100}%`);
+}
+document.addEventListener("input", (e) => { if (e.target.classList?.contains("slider")) paintSlider(e.target); });
+document.querySelectorAll(".slider").forEach(paintSlider);
 $("#bitrate-slider").addEventListener("input", (e) => { $("#bitrate-number").value = e.target.value; });
 $("#bitrate-slider").addEventListener("change", (e) => setQuality({ bitrate: clampBitrate(e.target.value) }));
-$("#bitrate-number").addEventListener("change", (e) => { const v = clampBitrate(e.target.value); e.target.value = v; $("#bitrate-slider").value = v; setQuality({ bitrate: v }); });
+$("#bitrate-number").addEventListener("change", (e) => { const v = clampBitrate(e.target.value); e.target.value = v; $("#bitrate-slider").value = v; paintSlider($("#bitrate-slider")); setQuality({ bitrate: v }); });
 function clampBitrate(v) { return Math.min(BITRATE_MAX_MBPS, Math.max(1, Math.round(+v) || 1)); }
 
 // FPS + resolution chips
@@ -5556,20 +6102,52 @@ $("#btn-lock-input").addEventListener("click", toggleLockInput);
 
 $("#btn-copy").addEventListener("click", () => { const id = shownId(); if (id) navigator.clipboard.writeText(id).then(() => showToast(t("id_copied"))); });
 
+// In-app confirmation (combined design, direction A). It replaces the native Windows message box, which could not
+// follow TryDesk's look, theme or language switch: a one-line title, the explanation, then Batal and the action.
+// Batal has the focus first (the safe answer); Escape, Batal or a click outside the box answer "no".
+function appConfirm({ title, message, detail, okLabel, cancelLabel }) {
+  return new Promise((resolve) => {
+    const ov = document.createElement("div");
+    ov.className = "overlay app-confirm"; ov.setAttribute("role", "alertdialog"); ov.setAttribute("aria-modal", "true"); ov.setAttribute("aria-labelledby", "app-confirm-title");
+    const box = document.createElement("div"); box.className = "app-confirm-box";
+    // Concept: the title's last word in red ("Buat ID baru?"), as every big sentence in the app.
+    const h = document.createElement("h3"); h.id = "app-confirm-title";
+    { const t0 = String(title || ""), cut = t0.lastIndexOf(" ");
+      if (cut > 0) { const em = document.createElement("em"); em.textContent = t0.slice(cut + 1); h.append(t0.slice(0, cut + 1), em); } else h.textContent = t0; }
+    const p1 = document.createElement("p"); p1.className = "acf-msg"; p1.textContent = message || "";
+    const row = document.createElement("div"); row.className = "acf-actions";
+    const no = document.createElement("button"); no.type = "button"; no.className = "btn-secondary"; no.textContent = cancelLabel || tr("Batal");
+    const yes = document.createElement("button"); yes.type = "button"; yes.className = "btn-connect acf-ok"; yes.textContent = okLabel || "OK";
+    row.append(no, yes);
+    box.append(h, p1);
+    if (detail) { const p2 = document.createElement("p"); p2.className = "acf-detail"; p2.textContent = detail; box.append(p2); }
+    box.append(row); ov.append(box);
+    const prev = document.activeElement;
+    const onKey = (e) => { if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); done(false); } };
+    function done(v) { document.removeEventListener("keydown", onKey, true); ov.remove(); try { prev && prev.focus(); } catch {} resolve(v); }
+    no.addEventListener("click", () => done(false));
+    yes.addEventListener("click", () => done(true));
+    ov.addEventListener("click", (e) => { if (e.target === ov) done(false); });
+    document.addEventListener("keydown", onKey, true);
+    document.body.appendChild(ov);
+    no.focus();
+  });
+}
+
 // Opt-in ID rotation: drop the stored identity and reconnect so the server issues a FRESH id+token.
 // The persistent-by-default ID is preserved; this is a deliberate, confirmed security action.
 async function regenerateId() {
   let ok = false;
   try {
     if (window.electronAPI && window.electronAPI.confirm) {
-      ok = await window.electronAPI.confirm({
+      ok = await appConfirm({
         title: t("regen_confirm_title"), message: t("regen_confirm_msg"), detail: t("regen_confirm_detail"),
         okLabel: t("regen_confirm_ok"), cancelLabel: t("regen_confirm_cancel"),
       });
     } else { ok = window.confirm(t("regen_confirm_msg") + "\n\n" + t("regen_confirm_detail")); }
   } catch { ok = false; }
   if (!ok) return;
-  // End any live sessions first — they belong to the OLD id — and any request still being answered.
+  // End any live sessions first,they belong to the OLD id,and any request still being answered.
   try { for (const s of [...sessions.values()]) closeSession(s, true); } catch {}
   try { if (host) closeSession(host, true); } catch {}
   try { if (acceptDlgCancel) acceptDlgCancel(); } catch {}
@@ -5584,7 +6162,7 @@ async function regenerateId() {
 $("#btn-regen-id")?.addEventListener("click", regenerateId);
 
 // Elevation: show "Run as administrator" in Security settings only when the host isn't elevated (so admin/UAC
-// windows — which otherwise freeze remote control — can be controlled too).
+// windows, which otherwise freeze remote control, can be controlled too).
 async function refreshElevationUI() {
   try {
     const cfg = config || await window.electronAPI.getConfig();
@@ -5596,7 +6174,7 @@ async function refreshElevationUI() {
 $("#btn-run-admin")?.addEventListener("click", async () => {
   let ok = true;
   try {
-    if (window.electronAPI.confirm) ok = await window.electronAPI.confirm({
+    if (window.electronAPI.confirm) ok = await appConfirm({
       title: tr("Jalankan sebagai administrator?"),
       message: tr("TryDesk akan ditutup lalu dibuka lagi dengan izin administrator."),
       detail: tr("Windows akan menampilkan prompt UAC. Sesi yang sedang berjalan akan terputus."),
@@ -5606,7 +6184,7 @@ $("#btn-run-admin")?.addEventListener("click", async () => {
   if (ok) {
     let started = false;
     try { started = await window.electronAPI.relaunchAsAdmin(); } catch {}
-    if (!started) { showToast("UAC dibatalkan — TryDesk tetap berjalan tanpa hak administrator"); return; }
+    if (!started) { showToast("UAC dibatalkan, TryDesk tetap berjalan tanpa hak administrator"); return; }
     // The elevated copy is starting and this one quits in a moment: end every session properly first, so the
     // other side is told why and the server drops the pairing (it used to stay "controlling" after the restart).
     const why = "TryDesk dibuka ulang sebagai administrator";
@@ -5633,25 +6211,47 @@ $("#btn-service-install")?.addEventListener("click", async () => {
   showToast("Memasang layanan… setujui prompt UAC.");
   let r; try { r = await window.electronAPI.serviceInstall(hash); } catch { r = { ok: false, code: 1 }; }
   if (r.ok) showToast("Layanan terpasang. ID PC ini tetap sama.");
-  else showToast(r.code === 1223 ? "UAC dibatalkan — layanan tidak dipasang" : tr("Layanan gagal dipasang") + ` (${r.code})`);
+  else showToast(r.code === 1223 ? "UAC dibatalkan, layanan tidak dipasang" : tr("Layanan gagal dipasang") + ` (${r.code})`);
   await refreshServiceState(); await refreshServiceUI();
 });
 $("#btn-service-remove")?.addEventListener("click", async () => {
   let r; try { r = await window.electronAPI.serviceUninstall(); } catch { r = { ok: false, code: 1 }; }
-  showToast(r.ok ? "Layanan dihapus" : r.code === 1223 ? "UAC dibatalkan — layanan tetap terpasang" : tr("Layanan gagal dihapus") + ` (${r.code})`);
+  showToast(r.ok ? "Layanan dihapus" : r.code === 1223 ? "UAC dibatalkan, layanan tetap terpasang" : tr("Layanan gagal dihapus") + ` (${r.code})`);
   await refreshServiceState(); refreshServiceUI();
 });
 refreshServiceUI();
+// Security at a glance (design direction C): three cells with the REAL state, read from the same places the
+// settings below use. Re-rendered whenever one of those changes; a click opens the setting that changes it.
+function renderSecSummary() {
+  const box = $("#sec-summary"); if (!box) return;
+  const pw = !!store.get("accessPasswordHash");
+  $("#sec-in").textContent = pw ? "Masuk dengan password" : "Selalu tanya";
+  $("#sec-ctl").textContent = $("#setting-allow-input")?.checked ? "Mouse dan keyboard" : "Hanya melihat";
+  const svcShown = $("#service-group") && $("#service-group").style.display !== "none";
+  $("#sec-svc-cell").classList.toggle("hidden", !svcShown);
+  $("#sec-svc").textContent = $("#service-state")?.classList.contains("on") ? "Tetap bisa diakses" : "Perlu TryDesk terbuka";
+}
+for (const sel of ["#access-pw-state", "#service-state"]) { const el = $(sel); if (el) new MutationObserver(renderSecSummary).observe(el, { childList: true, characterData: true, subtree: true, attributes: true }); }
+const svcGroup = $("#service-group"); if (svcGroup) new MutationObserver(renderSecSummary).observe(svcGroup, { attributes: true, attributeFilter: ["style"] });
+$("#setting-allow-input")?.addEventListener("change", renderSecSummary);
+$$("#sec-summary .sec-cell").forEach((c) => c.addEventListener("click", () => openSettingsAt("tab-security", c.dataset.go)));
+renderSecSummary();
+// Beranda (direction A): "Desktop ini, online". The word follows the status dot, so it is always the real state.
+(() => {
+  const st = $("#home-state"), dot = $("#status-dot"); if (!st || !dot) return;
+  const sync = () => { const c = dot.className; st.textContent = /\bconnected\b/.test(c) ? ", online" : /\berror\b/.test(c) ? ", offline" : ", menghubungkan"; };
+  new MutationObserver(sync).observe(dot, { attributes: true, attributeFilter: ["class"] }); sync();
+})();
 window.electronAPI?.onElevatedRelaunchBlocked?.(() =>showToast("TryDesk administrator tidak jadi terbuka karena TryDesk ini sudah berjalan. Klik kanan ikon TryDesk di tray → Keluar, lalu pilih Jalankan sebagai administrator lagi."));
 refreshElevationUI();
 // Access password: type → saved (as a salted hash) when the field is left or Enter is pressed; the trash button
 // removes it. The eye button keeps focus in the field, so what you typed can be checked before it is saved.
 function updateAccessPwUI() {
   const set = !!store.get("accessPasswordHash");
-  accessPassword.placeholder = set ? "Password tersimpan (ketik untuk ganti)" : "Kosong = selalu minta Accept";
+  accessPassword.placeholder = set ? "Password tersimpan (ketik untuk ganti)" : "Kosong = selalu minta Terima";
   $("#btn-clear-pass").classList.toggle("hidden", !set);
   const st = $("#access-pw-state");
-  st.textContent = set ? "✓ Password akses aktif — koneksi dengan password ini tidak perlu klik Terima." : "Belum ada password akses — setiap koneksi perlu klik Terima.";
+  st.textContent = set ? "✓ Password akses aktif. Koneksi dengan password ini tidak perlu klik Terima." : "Belum ada password akses, jadi setiap koneksi perlu klik Terima.";
   st.classList.toggle("on", set);
   renderHomeFacts();
 }
@@ -5670,7 +6270,7 @@ async function syncServicePassword(hash) {
   showToast("Menyimpan password ke layanan… setujui prompt UAC.");
   let r; try { r = await window.electronAPI.serviceSetPassword(hash || ""); } catch { r = { ok: false, code: 1 }; }
   if (r.ok) showToast("Password layanan diperbarui");
-  else showToast(r.code === 1223 ? "UAC dibatalkan — password layanan tidak berubah" : tr("Password layanan gagal diubah") + ` (${r.code})`);
+  else showToast(r.code === 1223 ? "UAC dibatalkan, password layanan tidak berubah" : tr("Password layanan gagal diubah") + ` (${r.code})`);
 }
 accessPassword.addEventListener("keydown", (e) => { if (e.key === "Enter") accessPassword.blur(); });
 accessPassword.addEventListener("change", async () => {
@@ -5686,7 +6286,7 @@ accessPassword.addEventListener("change", async () => {
   syncServicePassword(store.get("accessPasswordHash"));
 });
 
-// Digits are grouped as an ID ("123 456 789"); anything with a dot, colon or letter is left alone — an IP address
+// Digits are grouped as an ID ("123 456 789"); anything with a dot, colon or letter is left alone, an IP address
 // or a LAN PC name (see parseLanTarget).
 remoteIdInput.addEventListener("input", (e) => {
   const v = e.target.value;
@@ -5717,7 +6317,7 @@ addPwEye($("#connect-pw-input"));
 
 $("#btn-minimize").addEventListener("click", () => window.electronAPI.minimizeWindow());
 $("#btn-maximize").addEventListener("click", () => window.electronAPI.maximizeWindow());
-// Quitting TryDesk ends every session and makes this PC unreachable until it is started again — ask first
+// Quitting TryDesk ends every session and makes this PC unreachable until it is started again, ask first
 // when something is running (a helper on the host's desktop could otherwise cut themselves off by accident).
 async function confirmQuit(fromTray) {
   const live = !!host || viewerSessions().length > 0;
@@ -5725,7 +6325,7 @@ async function confirmQuit(fromTray) {
   if (fromTray) { try { window.electronAPI.focusWindow(); } catch {} }   // the question needs its context
   let ok = false;
   try {
-    ok = await window.electronAPI.confirm({
+    ok = await appConfirm({
       title: tr(fromTray ? "Keluar dari TryDesk?" : "Tutup TryDesk?"),
       message: tr(host ? "PC ini sedang dikontrol dari jarak jauh." : "Masih ada sesi remote yang terbuka."),
       detail: tr("Menutup TryDesk memutus semua sesi, dan PC ini tidak bisa dihubungi sampai TryDesk dibuka lagi."),
@@ -5735,7 +6335,7 @@ async function confirmQuit(fromTray) {
   if (ok) { try { for (const s of viewerSessions()) closeSession(s, true); if (host) closeSession(host, true); } catch {} }
   return ok;
 }
-// X (and Alt+F4 / the taskbar's Close): to the system tray like AnyDesk — sessions keep running, the PC stays
+// X (and Alt+F4 / the taskbar's Close): to the system tray like AnyDesk, sessions keep running, the PC stays
 // reachable. With that setting off, X quits as before. The phone app has no tray (and no X).
 async function onCloseButton() {
   if (prefGet("closeToTray") && window.electronAPI.hideToTray) {
@@ -5752,6 +6352,17 @@ window.electronAPI.onQuitRequested?.(async () => { if (await confirmQuit(true)) 
 
 $("#btn-settings").addEventListener("click", toggleSettings);
 $("#btn-settings-close").addEventListener("click", toggleSettings);
+// Picture 2: while Settings is open the title bar says "Pengaturan"; Keamanan shows this PC's ID with "Buat ID baru".
+{
+  const tbName = $("#titlebar .titlebar-logo span") || $(".titlebar-logo span");
+  const sync = () => {
+    const open = !overlaySettings.classList.contains("hidden");
+    if (tbName && !isPhoneUi()) tbName.textContent = open ? "Pengaturan" : "TryDesk";
+    if (open) { const el = $("#set-my-id"); if (el) el.textContent = myId ? fmtId(myId) : "-"; }
+  };
+  new MutationObserver(sync).observe(overlaySettings, { attributes: true, attributeFilter: ["class"] });
+  $("#btn-regen-id-2")?.addEventListener("click", () => $("#btn-regen-id").click());
+}
 overlaySettings.addEventListener("click", (e) => { if (e.target === overlaySettings) toggleSettings(); });
 
 // ─── Host access permissions (Settings → Keamanan → Izin akses) ───
@@ -5774,7 +6385,7 @@ function hostPermsChanged() {
     try { window.electronAPI.releaseRemoteInput(); } catch {}
     try { window.electronAPI.disableInputLock(); } catch {}
     if (host.inputLocked) { host.inputLocked = false; sendPrivacyResult(host, "lock-input", true, false, "revoked"); }
-    // A viewer who darkened this screen must not keep it dark after control is revoked — restore it too, and say
+    // A viewer who darkened this screen must not keep it dark after control is revoked, restore it too, and say
     // so, or the viewer's toggle keeps claiming a dark screen the person here can now see.
     if (host.blackScreenActive) {
       try { window.electronAPI.disableBlackScreen(); } catch {}
@@ -5883,7 +6494,7 @@ $("#update-dismiss").addEventListener("click", () => { if (updateInfo) store.set
   } else await refreshServiceState();
   checkUpdate(); setInterval(checkUpdate, 6 * 3600 * 1000);   // at start, then every 6 hours
   syncDefaultQualityUI();
-  // A pre-1.0 unsalted hash can't do the challenge, so it silently meant "always ask Accept" — drop it and say so.
+  // A pre-1.0 unsalted hash can't do the challenge, so it silently meant "always ask Accept", drop it and say so.
   const pwHash = store.get("accessPasswordHash");
   if (pwHash && !pwHash.includes(":")) { store.set("accessPasswordHash", null); setTimeout(() => showToast("Password akses dari versi lama perlu diset ulang (Pengaturan → Keamanan)"), 1500); }
   updateAccessPwUI();
@@ -5892,7 +6503,8 @@ $("#update-dismiss").addEventListener("click", () => { if (updateInfo) store.set
   const savedAlias = store.get("deviceAlias");
   if (savedAlias) $("#device-alias").value = savedAlias;
   // Restore theme (only dark/light supported now; normalize older values)
-  const savedTheme = store.get("theme") === "light" ? "light" : "dark";
+  if (isPhoneUi()) { const b = $("#theme-seg-system"); if (b) b.textContent = "Ikuti HP"; }
+  const savedTheme = ["light", "system"].includes(store.get("theme")) ? store.get("theme") : "dark";
   applyTheme(savedTheme);
   $("#setting-theme").value = savedTheme;
   if (store.get("theme") && store.get("theme") !== savedTheme) store.set("theme", savedTheme);

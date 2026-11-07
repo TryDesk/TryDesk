@@ -17,6 +17,7 @@ const MAX_CONN_PER_IP = 30;
 // "minimum" from the website's version.json and stop themselves; this reaches the older ones, which never do: they get
 // told to update (a server "error" shows as a toast in every version) and their requests are refused.
 const MIN_CLIENT_VERSION = /^\d+\.\d+\.\d+$/.test(process.env.MIN_CLIENT_VERSION || "") ? process.env.MIN_CLIENT_VERSION : "";
+let minClientVersion = MIN_CLIENT_VERSION;   // the env value, unless the official server's owner tools change it
 const UPDATE_URL_TEXT = "trydesk.ai.id/downloads";
 function verLess(a, b) {
   const x = a.split(".").map(Number), y = b.split(".").map(Number);
@@ -31,7 +32,7 @@ function clientVersion(ws, msg) {
   const m = String(ws.ua || "").match(/TryDesk\/(\d+\.\d+\.\d+)/i);
   return m ? m[1] : "";
 }
-const tooOld = (ws) => !!(MIN_CLIENT_VERSION && ws && ws.ver && verLess(ws.ver, MIN_CLIENT_VERSION));
+const tooOld = (ws) => !!(minClientVersion && ws && ws.ver && verLess(ws.ver, minClientVersion));
 // Text the app shows as a toast. Apps translate only the texts they already know, so a message added on the server
 // later stays Indonesian on an English screen. Apps from 1.3.2 say their language at sign-in and get just that one;
 // older ones get both, the system language (Accept-Language) first. Every user-visible server text goes through here.
@@ -206,9 +207,21 @@ function sweepReqBudgets() {
   }
 }
 
+// A device or address the server operator has blocked: told why in its own words, then dropped.
+function refuseBlocked(ws) {
+  send(ws, { type: "error", code: "blocked", message: say(ws,
+    "Perangkat atau jaringan ini diblokir oleh pengelola server TryDesk.",
+    "This device or network has been blocked by the TryDesk server operator.") });
+  setTimeout(() => { try { ws.close(4003, "blocked"); } catch {} }, 200);
+}
+
 function register(ws, msg) {
   let id = typeof msg.id === "string" ? msg.id : null;
   const token = typeof msg.token === "string" && msg.token.length >= 16 ? msg.token : null;
+  if (ownerTools && ownerTools.refuse && ownerTools.refuse({ id, ip: ws.ip })) {
+    note("blocked", { id, ip: ws.ip });
+    return refuseBlocked(ws);
+  }
 
   const valid = id && /^\d{3} \d{3} \d{3}$/.test(id) && token;
   const ownedByOther = valid && owners.has(id) && !ownerMatches(id, token);
@@ -415,8 +428,35 @@ function handle(ws, msg) {
 // The official TryDesk server loads a few owner-only tools from ./owner-tools (a file or a folder), which is not part
 // of the public source. Without it (any self-hosted server) everything here works exactly the same. Only "not there
 // at all" is silent: a file missing INSIDE the tools is logged, so a broken install doesn't fail unnoticed.
+// What the owner tools may do, beyond looking: end a running session, drop a device's connection, and change the
+// oldest app version allowed. Each returns false when there is nothing to act on.
+const control = {
+  envMinVersion: MIN_CLIENT_VERSION,
+  minVersion: () => minClientVersion,
+  setMinVersion(v) {
+    if (v !== "" && !/^\d+\.\d+\.\d+$/.test(v)) return false;
+    minClientVersion = v;
+    return true;
+  },
+  // Both sides get a deliberate "bye": the session closes there and the viewer does not reconnect by itself.
+  endSession(host) {
+    const viewer = hosting.get(host);
+    if (!viewer) return false;
+    removePair(host, viewer);
+    sendTo(viewer, { type: "peer-disconnected", fromId: host, bye: true, reason: "" });
+    sendTo(host, { type: "peer-disconnected", fromId: viewer, bye: true, reason: "" });
+    return true;
+  },
+  // The app reconnects by itself a moment later unless the device is also blocked.
+  disconnect(id) {
+    const ws = online.get(id);
+    if (!ws) return false;
+    try { ws.close(4000, "closed by server"); } catch {}
+    return true;
+  },
+};
 let ownerTools = null;
-try { ownerTools = require("./owner-tools")({ online, hosting, owners }); }
+try { ownerTools = require("./owner-tools")({ online, hosting, owners, control }); }
 catch (e) {
   const absent = e.code === "MODULE_NOT_FOUND" && !(e.requireStack || []).some((p) => /owner-tools/.test(p));
   if (!absent) console.error("owner-tools:", e.message);
@@ -478,6 +518,10 @@ wss.on("connection", (ws, req) => {
   }
   ws.isAlive = true;
   if (ownerTools) ownerTools.onConnection(ws, req);
+  if (ownerTools && ownerTools.refuse && ownerTools.refuse({ ip })) {
+    note("blocked", { ip });
+    refuseBlocked(ws);
+  }
   ws.on("pong", () => { ws.isAlive = true; });
 
   ws.on("message", (data) => {
@@ -531,4 +575,4 @@ setInterval(() => {
 process.on("uncaughtException", (e) => console.error("uncaught:", e && e.stack || e));
 
 server.listen(PORT, () => console.log(`TryDesk signaling server on port ${PORT}` +
-  (MIN_CLIENT_VERSION ? `, oldest app allowed ${MIN_CLIENT_VERSION}` : process.env.MIN_CLIENT_VERSION ? `, MIN_CLIENT_VERSION "${process.env.MIN_CLIENT_VERSION}" ignored (use x.y.z)` : "")));
+  (minClientVersion ? `, oldest app allowed ${minClientVersion}` : process.env.MIN_CLIENT_VERSION ? `, MIN_CLIENT_VERSION "${process.env.MIN_CLIENT_VERSION}" ignored (use x.y.z)` : "")));
